@@ -1,11 +1,11 @@
 // Clipboard Manager - macOS Native Clipboard History Manager
-// Phase 2: Storage Engine Integration
+// Phase 3: Sensitive Data Detection & Encryption
 
 mod clipboard;
 mod storage;
 
 use clipboard::ClipboardMonitor;
-use storage::{Database, DataProcessor};
+use storage::{Database, DataProcessor, Encryptor};
 use log::{error, info};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -17,26 +17,31 @@ async fn main() {
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    info!("🚀 Clipboard Manager - Phase 2: Storage Engine");
+    info!("🚀 Clipboard Manager - Phase 3: Sensitive Data Detection & Encryption");
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // Initialize database
-    let db_path = dirs::data_local_dir()
+    // Initialize data directory
+    let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("clipboard-manager")
-        .join("clipboard.db");
+        .join("clipboard-manager");
 
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create data directory");
-    }
+    std::fs::create_dir_all(&data_dir).expect("Failed to create data directory");
 
+    // Initialize database
+    let db_path = data_dir.join("clipboard.db");
     let db = Database::new(db_path.clone())
         .expect("Failed to initialize database");
 
     info!("✓ Database initialized at: {}", db_path.display());
     info!("  Items in history: {}", db.count_items().unwrap_or(0));
     info!("  Database size: {} KB", db.get_db_size().unwrap_or(0) / 1024);
+
+    // Initialize encryptor
+    let key_path = data_dir.join("encryption.key");
+    let encryptor = Encryptor::new(key_path)
+        .expect("Failed to initialize encryptor");
+
+    info!("✓ Encryption initialized");
 
     // Run cleanup on startup (remove items older than 7 days)
     match db.cleanup_old_items(7) {
@@ -47,7 +52,7 @@ async fn main() {
     info!("");
     info!("✓ Clipboard monitor initialized (polling every 500ms)");
     info!("   Monitoring NSPasteboard for changes...");
-    info!("   Storing all clipboard changes to database");
+    info!("   Auto-detecting and encrypting sensitive data");
     info!("");
 
     // Create channel for clipboard change notifications
@@ -76,8 +81,25 @@ async fn main() {
             // Process the text data
             let processed = DataProcessor::process_text(&text, &change.types);
 
+            // Encrypt if sensitive
+            let (blob_data, is_encrypted) = if processed.is_sensitive {
+                match encryptor.encrypt(&processed.blob) {
+                    Ok(encrypted) => {
+                        info!("   🔐 Encrypted sensitive data ({} → {} bytes)",
+                              processed.blob.len(), encrypted.len());
+                        (encrypted, true)
+                    }
+                    Err(e) => {
+                        error!("   ✗ Encryption failed: {}, storing unencrypted", e);
+                        (processed.blob.clone(), false)
+                    }
+                }
+            } else {
+                (processed.blob.clone(), false)
+            };
+
             // Store blob
-            match db.store_blob(&processed.blob) {
+            match db.store_blob(&blob_data) {
                 Ok(blob_id) => {
                     // Store metadata
                     let timestamp = chrono::Utc::now().timestamp();
@@ -85,9 +107,9 @@ async fn main() {
                         timestamp,
                         processed.data_type.as_str(),
                         processed.is_sensitive,
-                        false, // Not encrypted yet (Phase 3)
+                        is_encrypted,
                         processed.preview_text.as_deref(),
-                        processed.blob.len() as i64,
+                        processed.blob.len() as i64, // Original size
                         blob_id,
                         processed.metadata.as_deref(),
                     ) {
