@@ -1,7 +1,7 @@
 // SQLite database management for clipboard history
 use rusqlite::{Connection, Result, params};
 use std::path::PathBuf;
-use log::{info, error};
+use log::info;
 
 const SCHEMA_VERSION: i32 = 1;
 

@@ -89,11 +89,26 @@ fn main() {
                 info!("📋 Clipboard changed (count: {})", change.change_count);
                 info!("   Types: {:?}", change.types);
 
-                // Get string content if available
-                if let Some(text) = ClipboardMonitor::get_string() {
-                    // Process the text data
-                    let processed = DataProcessor::process_text(&text, &change.types);
+                // Try to get image data first
+                let processed_opt = if let Some((image_data, uti_type)) = ClipboardMonitor::get_image() {
+                    info!("   🖼️  Image detected: {} ({} bytes)", uti_type, image_data.len());
+                    match DataProcessor::process_image(&image_data, &uti_type) {
+                        Ok(processed) => Some(processed),
+                        Err(e) => {
+                            error!("   ✗ Failed to process image: {}", e);
+                            None
+                        }
+                    }
+                } else if let Some(text) = ClipboardMonitor::get_string() {
+                    // Process text data
+                    Some(DataProcessor::process_text(&text, &change.types))
+                } else {
+                    info!("   (Unsupported content type)");
+                    None
+                };
 
+                // Store processed data
+                if let Some(processed) = processed_opt {
                     // Encrypt if sensitive
                     let (blob_data, is_encrypted) = if processed.is_sensitive {
                         if let Ok(enc) = encryptor_clone.lock() {
@@ -144,8 +159,6 @@ fn main() {
                             Err(e) => error!("   ✗ Failed to store blob: {}", e),
                         }
                     }
-                } else {
-                    info!("   (Non-text content, skipped)");
                 }
 
                 info!("");
