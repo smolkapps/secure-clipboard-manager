@@ -1,5 +1,5 @@
 // Data processor for clipboard content
-use image::{ImageFormat, DynamicImage};
+use image::{ImageFormat, DynamicImage, GenericImageView};
 use std::io::Cursor;
 use log::info;
 
@@ -61,22 +61,37 @@ impl DataProcessor {
         let img = image::load_from_memory(image_data)
             .map_err(|e| format!("Failed to load image: {}", e))?;
 
+        // Generate thumbnail (200x200px max)
+        let thumbnail = Self::generate_thumbnail(&img, 200, 200);
+
         // Convert to optimized PNG
         let png_data = Self::convert_to_png(&img)?;
+        let thumbnail_data = Self::convert_to_png(&thumbnail)?;
+
+        // Calculate compression ratio
+        let compression_ratio = if image_data.len() > 0 {
+            (image_data.len() as f32 / png_data.len() as f32 * 100.0) as u32
+        } else {
+            100
+        };
 
         // Generate preview text (dimensions)
-        let preview_text = format!("{}x{} image", img.width(), img.height());
+        let preview_text = format!("{}x{} {} ({}% compression)",
+                                   img.width(), img.height(), source_format, compression_ratio);
 
-        info!("🖼️  Converted {} to PNG ({} -> {} bytes)",
-              source_format, image_data.len(), png_data.len());
+        info!("🖼️  Converted {} to PNG ({} -> {} bytes, {}% compression)",
+              source_format, image_data.len(), png_data.len(), compression_ratio);
+        info!("   Generated {}x{} thumbnail ({} bytes)",
+              thumbnail.width(), thumbnail.height(), thumbnail_data.len());
 
         Ok(ProcessedData {
             data_type: ProcessedDataType::Image,
             blob: png_data,
             preview_text: Some(preview_text),
             is_sensitive: false,
-            metadata: Some(format!("{{\"width\":{},\"height\":{},\"format\":\"{}\"}}",
-                                   img.width(), img.height(), source_format)),
+            metadata: Some(format!("{{\"width\":{},\"height\":{},\"format\":\"{}\",\"thumbnail_width\":{},\"thumbnail_height\":{},\"thumbnail_size\":{}}}",
+                                   img.width(), img.height(), source_format,
+                                   thumbnail.width(), thumbnail.height(), thumbnail_data.len())),
         })
     }
 
@@ -210,6 +225,27 @@ impl DataProcessor {
         } else {
             "Unknown"
         }
+    }
+
+    /// Generate thumbnail with max dimensions while preserving aspect ratio
+    fn generate_thumbnail(img: &DynamicImage, max_width: u32, max_height: u32) -> DynamicImage {
+        let (width, height) = img.dimensions();
+
+        // If image is already smaller than max dimensions, return as-is
+        if width <= max_width && height <= max_height {
+            return img.clone();
+        }
+
+        // Calculate scaling factor to fit within max dimensions
+        let width_ratio = max_width as f32 / width as f32;
+        let height_ratio = max_height as f32 / height as f32;
+        let scale = width_ratio.min(height_ratio);
+
+        let new_width = (width as f32 * scale) as u32;
+        let new_height = (height as f32 * scale) as u32;
+
+        // Use Lanczos3 filter for high-quality downsampling
+        img.resize(new_width, new_height, image::imageops::FilterType::Lanczos3)
     }
 
     /// Convert image to optimized PNG
