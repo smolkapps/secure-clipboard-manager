@@ -1,0 +1,42 @@
+[package]
+name = "clipboard-manager"
+version = "0.1.0"
+edition = "2021"
+authors = ["Clipboard Manager Team"]
+description = "Fast, privacy-focused clipboard manager for macOS"
+
+[[bin]]
+name = "clipboard-manager"
+path = "src/main.rs"
+
+[dependencies]
+# macOS Native Bindings
+cacao = "0.4.0-beta2"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["all"] }
+objc2-app-kit = { version = "0.2", features = ["all"] }
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Image Processing
+image = { version = "0.25", features = ["png", "tiff"] }
+
+# Utilities
+log = "0.4"
+env_logger = "0.11"
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
