@@ -121,6 +121,36 @@ impl ClipboardMonitor {
         }
     }
 
+    /// Extract image data from clipboard (TIFF, PNG, JPEG)
+    pub fn get_image() -> Option<(Vec<u8>, String)> {
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+
+            // Try TIFF first (macOS default screenshot format)
+            let tiff_type = NSString::from_str("public.tiff");
+            if let Some(data) = pasteboard.dataForType(&tiff_type) {
+                let bytes = data.bytes();
+                return Some((bytes.to_vec(), "public.tiff".to_string()));
+            }
+
+            // Try PNG
+            let png_type = NSString::from_str("public.png");
+            if let Some(data) = pasteboard.dataForType(&png_type) {
+                let bytes = data.bytes();
+                return Some((bytes.to_vec(), "public.png".to_string()));
+            }
+
+            // Try JPEG
+            let jpeg_type = NSString::from_str("public.jpeg");
+            if let Some(data) = pasteboard.dataForType(&jpeg_type) {
+                let bytes = data.bytes();
+                return Some((bytes.to_vec(), "public.jpeg".to_string()));
+            }
+
+            None
+        }
+    }
+
     /// Get current change count (useful for testing)
     pub fn change_count() -> i64 {
         unsafe {

@@ -1,7 +1,7 @@
 // Data processor for clipboard content
 use image::{ImageFormat, DynamicImage};
 use std::io::Cursor;
-use log::{info, warn};
+use log::info;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProcessedDataType {
