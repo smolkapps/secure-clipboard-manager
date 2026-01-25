@@ -313,4 +313,34 @@ mod tests {
         let data = DataProcessor::process_text(text, &[]);
         assert_eq!(data.preview_text, Some("Line 1 Line 2 Line 3".to_string()));
     }
+
+    #[test]
+    fn test_thumbnail_generation() {
+        use image::{RgbImage, DynamicImage};
+
+        // Create a large test image (400x300)
+        let img = DynamicImage::ImageRgb8(RgbImage::new(400, 300));
+
+        // Generate thumbnail
+        let thumbnail = DataProcessor::generate_thumbnail(&img, 200, 200);
+
+        // Should scale down proportionally
+        assert_eq!(thumbnail.width(), 200); // Width maxed out
+        assert_eq!(thumbnail.height(), 150); // Height scaled proportionally (300 * 200/400 = 150)
+    }
+
+    #[test]
+    fn test_thumbnail_preserves_small_images() {
+        use image::{RgbImage, DynamicImage};
+
+        // Create a small test image (100x80)
+        let img = DynamicImage::ImageRgb8(RgbImage::new(100, 80));
+
+        // Generate thumbnail
+        let thumbnail = DataProcessor::generate_thumbnail(&img, 200, 200);
+
+        // Should not scale up
+        assert_eq!(thumbnail.width(), 100);
+        assert_eq!(thumbnail.height(), 80);
+    }
 }
