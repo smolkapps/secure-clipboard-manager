@@ -1,21 +1,23 @@
 // Status bar (menu bar) icon and menu using native macOS APIs
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
 use objc2::ClassType;
 use objc2_app_kit::{NSStatusBar, NSStatusItem, NSMenu, NSMenuItem, NSVariableStatusItemLength};
 use objc2_foundation::{NSString, MainThreadMarker};
 use std::sync::{Arc, Mutex};
 use crate::storage::Database;
+use crate::ui::actions::MenuActions;
 
 pub struct StatusBarController {
     #[allow(dead_code)]
     status_item: Retained<NSStatusItem>,
-    #[allow(dead_code)]
     db: Arc<Mutex<Database>>,
+    actions: Arc<MenuActions>,
 }
 
 impl StatusBarController {
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
+        let actions = Arc::new(MenuActions::new(Arc::clone(&db)));
+
         unsafe {
             let mtm = MainThreadMarker::new().expect("Must be on main thread");
 
@@ -32,15 +34,7 @@ impl StatusBarController {
             }
 
             // Create menu
-            let menu = NSMenu::new(mtm);
-            menu.setAutoenablesItems(false);
-
-            // Add menu items
-            Self::add_menu_item(&menu, "Clipboard History (Cmd+Shift+V)", None, false, mtm);
-            Self::add_separator(&menu, mtm);
-            Self::add_menu_item(&menu, "Clear History", None, true, mtm);
-            Self::add_separator(&menu, mtm);
-            Self::add_menu_item(&menu, "Quit", Some("q"), true, mtm);
+            let menu = Self::build_menu(&db, mtm);
 
             // Set menu
             status_item.setMenu(Some(&menu));
@@ -50,8 +44,60 @@ impl StatusBarController {
             StatusBarController {
                 status_item,
                 db,
+                actions,
             }
         }
+    }
+
+    unsafe fn build_menu(db: &Arc<Mutex<Database>>, mtm: MainThreadMarker) -> Retained<NSMenu> {
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
+
+        // Add "Show All History" item
+        Self::add_menu_item(&menu, "Show All History", Some("h"), true, mtm);
+        Self::add_separator(&menu, mtm);
+
+        // Add recent clipboard items
+        if let Ok(db_lock) = db.lock() {
+            match db_lock.get_recent_items(10) {
+                Ok(items) => {
+                    if items.is_empty() {
+                        Self::add_menu_item(&menu, "(No clipboard history yet)", None, false, mtm);
+                    } else {
+                        for (i, item) in items.iter().enumerate() {
+                            let title = if let Some(preview) = &item.preview_text {
+                                let preview_short = if preview.len() > 50 {
+                                    format!("{}...", &preview[..50])
+                                } else {
+                                    preview.clone()
+                                };
+                                let sensitive = if item.is_sensitive { " 🔒" } else { "" };
+                                format!("{}{}", preview_short, sensitive)
+                            } else {
+                                format!("{} item", item.data_type)
+                            };
+
+                            Self::add_menu_item(&menu, &title, None, true, mtm);
+
+                            // Add separator after every 5 items for readability
+                            if i == 4 && items.len() > 5 {
+                                Self::add_separator(&menu, mtm);
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    Self::add_menu_item(&menu, "(Error loading history)", None, false, mtm);
+                }
+            }
+        }
+
+        Self::add_separator(&menu, mtm);
+        Self::add_menu_item(&menu, "Clear History", None, true, mtm);
+        Self::add_separator(&menu, mtm);
+        Self::add_menu_item(&menu, "Quit", Some("q"), true, mtm);
+
+        menu
     }
 
     unsafe fn add_menu_item(
