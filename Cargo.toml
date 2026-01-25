@@ -19,6 +19,8 @@ cacao = "0.4.0-beta2"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["all"] }
 objc2-app-kit = { version = "0.2", features = ["all"] }
+cocoa = "0.25"
+core-graphics = "0.23"
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
