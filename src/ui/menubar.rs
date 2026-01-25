@@ -1,17 +1,23 @@
 // Menu bar application using Cacao
-use cacao::appkit::{App, AppDelegate};
+use cacao::appkit::AppDelegate;
 use std::sync::{Arc, Mutex};
 use crate::storage::Database;
+use crate::ui::popup::PopupWindow;
 
 pub struct MenuBarApp {
     db: Arc<Mutex<Database>>,
+    popup: Arc<Mutex<PopupWindow>>,
 }
 
 impl MenuBarApp {
     pub fn new(db: Database) -> Self {
         log::info!("📱 Creating menu bar app...");
+        let db_arc = Arc::new(Mutex::new(db));
+        let popup = Arc::new(Mutex::new(PopupWindow::new(Arc::clone(&db_arc))));
+
         MenuBarApp {
-            db: Arc::new(Mutex::new(db)),
+            db: db_arc,
+            popup,
         }
     }
 }
