@@ -1,12 +1,15 @@
 // Menu bar application using Cacao
 use cacao::appkit::AppDelegate;
 use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
 use crate::storage::Database;
 use crate::ui::popup::PopupWindow;
+use crate::ui::statusbar::StatusBarController;
 
 pub struct MenuBarApp {
     db: Arc<Mutex<Database>>,
     popup: Arc<Mutex<PopupWindow>>,
+    status_bar: RefCell<Option<StatusBarController>>,
 }
 
 impl MenuBarApp {
@@ -18,6 +21,7 @@ impl MenuBarApp {
         MenuBarApp {
             db: db_arc,
             popup,
+            status_bar: RefCell::new(None),
         }
     }
 }
@@ -25,6 +29,9 @@ impl MenuBarApp {
 impl AppDelegate for MenuBarApp {
     fn did_finish_launching(&self) {
         log::info!("✓ Menu bar app launched");
+
+        // Create status bar icon
+        *self.status_bar.borrow_mut() = Some(StatusBarController::new(Arc::clone(&self.db)));
 
         // Get clipboard history stats
         if let Ok(db) = self.db.lock() {
@@ -36,7 +43,8 @@ impl AppDelegate for MenuBarApp {
 
         log::info!("");
         log::info!("🎯 Menu bar app running!");
-        log::info!("   Press Ctrl+C to quit");
+        log::info!("   Look for the 📋 icon in your menu bar");
+        log::info!("   (Keyboard shortcut not yet implemented)");
     }
 
     fn should_terminate_after_last_window_closed(&self) -> bool {
