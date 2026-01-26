@@ -1,7 +1,8 @@
 // Status bar (menu bar) icon and menu using native macOS APIs
 use objc2::rc::Retained;
 use objc2::ClassType;
-use objc2_app_kit::{NSStatusBar, NSStatusItem, NSMenu, NSMenuItem, NSVariableStatusItemLength};
+use objc2::sel;
+use objc2_app_kit::{NSStatusBar, NSStatusItem, NSMenu, NSMenuItem, NSVariableStatusItemLength, NSApplication};
 use objc2_foundation::{NSString, MainThreadMarker};
 use std::sync::{Arc, Mutex};
 use crate::storage::Database;
@@ -95,7 +96,24 @@ impl StatusBarController {
         Self::add_separator(&menu, mtm);
         Self::add_menu_item(&menu, "Clear History", None, true, mtm);
         Self::add_separator(&menu, mtm);
-        Self::add_menu_item(&menu, "Quit", Some("q"), true, mtm);
+
+        // Add Quit menu item with NSApp terminate action
+        unsafe {
+            let title = NSString::from_str("Quit");
+            let key = NSString::from_str("q");
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                &title,
+                Some(sel!(terminate:)),
+                &key,
+            );
+
+            // Set target to NSApp
+            let app = NSApplication::sharedApplication(mtm);
+            item.setTarget(Some(&app));
+
+            menu.addItem(&item);
+        }
 
         menu
     }

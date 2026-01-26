@@ -68,19 +68,30 @@ impl DataProcessor {
         let png_data = Self::convert_to_png(&img)?;
         let thumbnail_data = Self::convert_to_png(&thumbnail)?;
 
-        // Calculate compression ratio
-        let compression_ratio = if image_data.len() > 0 {
-            (image_data.len() as f32 / png_data.len() as f32 * 100.0) as u32
+        // Calculate compression percentage (how much smaller the new file is)
+        let compression_pct = if image_data.len() > 0 {
+            let reduction = ((image_data.len() as f32 - png_data.len() as f32) / image_data.len() as f32 * 100.0) as i32;
+            reduction.max(-999).min(100) // Clamp to reasonable range
         } else {
-            100
+            0
         };
 
         // Generate preview text (dimensions)
-        let preview_text = format!("{}x{} {} ({}% compression)",
-                                   img.width(), img.height(), source_format, compression_ratio);
+        let preview_text = if compression_pct > 0 {
+            format!("{}x{} {} ({}% smaller)", img.width(), img.height(), source_format, compression_pct)
+        } else if compression_pct < 0 {
+            format!("{}x{} {} ({}% larger)", img.width(), img.height(), source_format, -compression_pct)
+        } else {
+            format!("{}x{} {}", img.width(), img.height(), source_format)
+        };
 
-        info!("🖼️  Converted {} to PNG ({} -> {} bytes, {}% compression)",
-              source_format, image_data.len(), png_data.len(), compression_ratio);
+        if compression_pct > 0 {
+            info!("🖼️  Converted {} to PNG ({} -> {} bytes, {}% smaller)",
+                  source_format, image_data.len(), png_data.len(), compression_pct);
+        } else {
+            info!("🖼️  Converted {} to PNG ({} -> {} bytes)",
+                  source_format, image_data.len(), png_data.len());
+        }
         info!("   Generated {}x{} thumbnail ({} bytes)",
               thumbnail.width(), thumbnail.height(), thumbnail_data.len());
 
