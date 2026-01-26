@@ -2,7 +2,6 @@
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use objc2::rc::Retained;
-use objc2::ClassType;
 use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView};
 use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker};
 use crate::storage::{Database, Encryptor, ClipboardItem};
@@ -56,13 +55,17 @@ impl PopupWindow {
         window.setLevel(3); // NSFloatingWindowLevel
         window.setHidesOnDeactivate(true);
 
+        // Allow window to receive keyboard events
+        window.setAcceptsMouseMovedEvents(true);
+
         // Create text view for displaying items
         let scroll_view = NSScrollView::new(mtm);
         scroll_view.setHasVerticalScroller(true);
         scroll_view.setFrame(content_rect);
 
         let text_view = NSTextView::new(mtm);
-        text_view.setEditable(false);
+        text_view.setEditable(true); // Make editable to receive key events
+        text_view.setSelectable(false); // But don't allow text selection
         scroll_view.setDocumentView(Some(&text_view));
 
         window.setContentView(Some(&scroll_view));
@@ -248,4 +251,12 @@ impl PopupWindow {
 
         self.hide();
     }
+
+    // TODO: Add keyboard event handling
+    // For now, the window displays but keyboard navigation needs to be wired up
+    // Options to explore:
+    // 1. NSResponder chain with custom NSWindow subclass
+    // 2. Local event monitor with addLocalMonitorForEventsMatchingMask
+    // 3. Global event polling (but must be on main thread)
+    // 4. Use NSTextView delegate methods to intercept key presses
 }
