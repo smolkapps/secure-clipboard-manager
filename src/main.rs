@@ -180,14 +180,17 @@ fn main() {
         });
     });
 
-    // Create menu bar app with database access
-    // Need to get database out of Arc<Mutex> for MenuBarApp
-    // For now, create a new connection
+    // Create menu bar app with database and encryptor access
+    // Need to create separate connections for UI thread
     let db_path2 = data_dir.join("clipboard.db");
     let db_for_ui = Database::new(db_path2)
         .expect("Failed to initialize database for UI");
 
-    let app = MenuBarApp::new(db_for_ui);
+    let key_path2 = data_dir.join("encryption.key");
+    let encryptor_for_ui = Encryptor::new(key_path2)
+        .expect("Failed to initialize encryptor for UI");
+
+    let app = MenuBarApp::new(db_for_ui, encryptor_for_ui);
 
     info!("✓ Launching menu bar app...");
     info!("");

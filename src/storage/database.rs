@@ -245,6 +245,7 @@ impl Database {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct ClipboardItem {
     pub id: i64,
     pub timestamp: i64,

@@ -4,7 +4,7 @@ pub mod processor;
 pub mod encryption;
 pub mod search;
 
-pub use database::Database;
+pub use database::{Database, ClipboardItem};
 pub use processor::DataProcessor;
 pub use encryption::Encryptor;
 pub use search::SearchEngine;
