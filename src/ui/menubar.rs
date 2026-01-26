@@ -2,7 +2,7 @@
 use cacao::appkit::AppDelegate;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
-use crate::storage::Database;
+use crate::storage::{Database, Encryptor};
 use crate::ui::popup::PopupWindow;
 use crate::ui::statusbar::StatusBarController;
 use crate::ui::hotkey::HotkeyManager;
@@ -15,10 +15,14 @@ pub struct MenuBarApp {
 }
 
 impl MenuBarApp {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Database, encryptor: Encryptor) -> Self {
         log::info!("📱 Creating menu bar app...");
         let db_arc = Arc::new(Mutex::new(db));
-        let popup = Arc::new(Mutex::new(PopupWindow::new(Arc::clone(&db_arc))));
+        let enc_arc = Arc::new(Mutex::new(encryptor));
+        let popup = Arc::new(Mutex::new(PopupWindow::new(
+            Arc::clone(&db_arc),
+            Arc::clone(&enc_arc)
+        )));
 
         MenuBarApp {
             db: db_arc,
