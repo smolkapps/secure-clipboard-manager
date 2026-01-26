@@ -45,6 +45,9 @@ impl AppDelegate for MenuBarApp {
             Ok(hotkey_mgr) => {
                 *self.hotkey.borrow_mut() = Some(hotkey_mgr);
                 log::info!("✓ Global hotkey registered: Cmd+Shift+C");
+
+                // Note: Keyboard event handling is done in the popup window itself
+                // via local event monitor when window is shown
             }
             Err(e) => log::error!("  Failed to register hotkey: {}", e),
         }
