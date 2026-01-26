@@ -25,6 +25,9 @@ core-graphics = "0.23"
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 
+# Global Hotkey
+global-hotkey = "0.6"
+
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
