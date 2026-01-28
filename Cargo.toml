@@ -28,6 +28,9 @@ tokio = { version = "1", features = ["full"] }
 # Global Hotkey
 global-hotkey = "0.6"
 
+# Dispatch (for main thread dispatch)
+dispatch = "0.2"
+
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -48,9 +51,15 @@ log = "0.4"
 env_logger = "0.11"
 chrono = "0.4"
 dirs = "5.0"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"
+criterion = "0.5"
+
+[[bench]]
+name = "benchmarks"
+harness = false
 
 [profile.release]
 opt-level = 3

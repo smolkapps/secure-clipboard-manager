@@ -22,8 +22,8 @@ impl MenuActions {
                     log::info!("   Displaying {} clipboard items:", items.len());
                     for (i, item) in items.iter().enumerate() {
                         if let Some(preview) = &item.preview_text {
-                            let preview_short = if preview.len() > 60 {
-                                format!("{}...", &preview[..60])
+                            let preview_short = if preview.chars().count() > 60 {
+                                format!("{}...", preview.chars().take(60).collect::<String>())
                             } else {
                                 preview.clone()
                             };
