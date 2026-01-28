@@ -12,105 +12,18 @@ use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
 use dispatch::Queue;
 
-// Keyboard event handler delegate for NSTextView
-declare_class!(
-    struct PopupKeyHandler;
-
-    unsafe impl ClassType for PopupKeyHandler {
-        type Super = NSObject;
-        type Mutability = InteriorMutable;
-        const NAME: &'static str = "PopupKeyHandler";
-    }
-
-    unsafe impl NSObjectProtocol for PopupKeyHandler {}
-
-    unsafe impl NSTextViewDelegate for PopupKeyHandler {
-        // Handle special key commands (arrow keys, Enter, Escape)
-        #[method(textView:doCommandBySelector:)]
-        fn text_view_do_command(
-            &self,
-            _text_view: &NSTextView,
-            selector: objc2::runtime::Sel,
-        ) -> bool {
-            let sel_name = selector.name();
-
-            log::debug!("🔑 Key command: {}", sel_name);
-
-            // Map selector names to key actions
-            match sel_name {
-                "moveDown:" => {
-                    // Arrow down - send to main thread handler
-                    Self::handle_navigation_key("down");
-                    true // Consumed event
-                }
-                "moveUp:" => {
-                    // Arrow up
-                    Self::handle_navigation_key("up");
-                    true
-                }
-                "insertNewline:" => {
-                    // Enter key
-                    Self::handle_navigation_key("enter");
-                    true
-                }
-                "cancelOperation:" => {
-                    // Escape key
-                    Self::handle_navigation_key("escape");
-                    true
-                }
-                _ => false // Let system handle it
-            }
-        }
-
-        // Handle regular character input (for vim keys)
-        #[method(insertText:)]
-        fn insert_text(&self, string: &AnyObject) {
-            // Try to get the string value
-            if let Some(ns_string) = string.downcast_ref::<NSString>() {
-                let text = ns_string.to_string();
-                if let Some(ch) = text.chars().next() {
-                    log::debug!("🔑 Character typed: '{}'", ch);
-
-                    match ch {
-                        'j' => Self::handle_navigation_key("down"),
-                        'k' => Self::handle_navigation_key("up"),
-                        _ => {} // Ignore other characters
-                    }
-                }
-            }
-        }
-    }
-);
-
-// Global channel for key events
-use std::sync::OnceLock;
-use std::sync::mpsc::{channel, Sender, Receiver};
-
-static KEY_EVENT_SENDER: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
-
-impl PopupKeyHandler {
-    fn handle_navigation_key(key: &str) {
-        log::info!("🔑 Navigation key pressed: {}", key);
-
-        // Send key event through channel
-        if let Some(sender_lock) = KEY_EVENT_SENDER.get() {
-            if let Ok(sender) = sender_lock.lock() {
-                let _ = sender.send(key.to_string());
-            }
-        }
-    }
-}
+// NOTE: Custom keyboard delegate disabled temporarily due to objc2 0.5 API changes
+// Keyboard navigation will be added in a future update
+// For now, the clipboard history window works but without vim-style j/k navigation
 
 pub struct PopupWindow {
     db: Arc<Mutex<Database>>,
     encryptor: Arc<Mutex<Encryptor>>,
     window: RefCell<Option<Retained<NSWindow>>>,
     text_view: RefCell<Option<Retained<NSTextView>>>,
-    delegate: RefCell<Option<Retained<PopupKeyHandler>>>,
     items: RefCell<Vec<ClipboardItem>>,
     selected_index: RefCell<usize>,
     visible: bool,
-    key_event_receiver: Receiver<String>,
 }
 
 // SAFETY: PopupWindow contains NSWindow which is !Send, but we only access it
@@ -122,22 +35,14 @@ impl PopupWindow {
     pub fn new(db: Arc<Mutex<Database>>, encryptor: Arc<Mutex<Encryptor>>) -> Self {
         log::info!("✓ Popup window system initialized");
 
-        // Create channel for keyboard events
-        let (sender, receiver) = channel();
-
-        // Store sender globally for delegate to use
-        let _ = KEY_EVENT_SENDER.set(Mutex::new(sender));
-
         PopupWindow {
             db,
             encryptor,
             window: RefCell::new(None),
             text_view: RefCell::new(None),
-            delegate: RefCell::new(None),
             items: RefCell::new(Vec::new()),
             selected_index: RefCell::new(0),
             visible: false,
-            key_event_receiver: receiver,
         }
     }
 
@@ -173,15 +78,8 @@ impl PopupWindow {
         scroll_view.setFrame(content_rect);
 
         let text_view = NSTextView::new(mtm);
-        text_view.setEditable(true); // Make editable to receive key events
-        text_view.setSelectable(false); // But don't allow text selection
-
-        // Create and set the keyboard event delegate
-        let delegate = PopupKeyHandler::new();
-        text_view.setDelegate(Some(&delegate));
-
-        // Store delegate to prevent deallocation
-        *self.delegate.borrow_mut() = Some(delegate);
+        text_view.setEditable(false);
+        text_view.setSelectable(true);
 
         scroll_view.setDocumentView(Some(&text_view));
 
@@ -190,7 +88,7 @@ impl PopupWindow {
         // Store text view for later updates
         *self.text_view.borrow_mut() = Some(text_view);
 
-        log::info!("✓ Keyboard event delegate registered");
+        log::info!("✓ Window created (keyboard delegate temporarily disabled)");
 
         window
     }
@@ -393,24 +291,9 @@ impl PopupWindow {
         self.hide();
     }
 
-    /// Check if the popup is currently visible
-    pub fn is_visible(&self) -> bool {
-        self.visible
-    }
-
     /// Process any pending keyboard events (call this periodically from main thread)
+    /// NOTE: Temporarily disabled - keyboard navigation will be re-added in future update
     pub fn process_key_events(&mut self) {
-        // Process all pending key events
-        while let Ok(key) = self.key_event_receiver.try_recv() {
-            log::info!("📋 Processing key event: {}", key);
-
-            match key.as_str() {
-                "up" => self.move_selection_up(),
-                "down" => self.move_selection_down(),
-                "enter" => self.paste_and_close(),
-                "escape" => self.hide(),
-                _ => log::warn!("Unknown key event: {}", key),
-            }
-        }
+        // Keyboard event processing temporarily disabled
     }
 }
