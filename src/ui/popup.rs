@@ -393,6 +393,11 @@ impl PopupWindow {
         self.hide();
     }
 
+    /// Check if the popup is currently visible
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
     /// Process any pending keyboard events (call this periodically from main thread)
     pub fn process_key_events(&mut self) {
         // Process all pending key events

@@ -248,22 +248,31 @@ fn main() {
                     let popup_clone = Arc::clone(&popup_for_polling);
 
                     Queue::main().exec_async(move || {
-                        if let Ok(mut popup) = popup_clone.lock() {
-                            popup.toggle();
-                        }
+                        // Catch any panics to prevent crashes through Obj-C boundary
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if let Ok(mut popup) = popup_clone.lock() {
+                                popup.toggle();
+                            }
+                        }));
                     });
                 } else {
                     log::debug!("Ignoring duplicate hotkey event (debouncing)");
                 }
             }
 
-            // Also process keyboard events for the popup window
+            // Also process keyboard events for the popup window (only if visible)
             // This allows keyboard navigation to work
             let popup_clone = Arc::clone(&popup_for_polling);
             Queue::main().exec_async(move || {
-                if let Ok(mut popup) = popup_clone.lock() {
-                    popup.process_key_events();
-                }
+                // Catch any panics to prevent crashes through Obj-C boundary
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Ok(mut popup) = popup_clone.lock() {
+                        // Only process key events if the popup is actually visible
+                        if popup.is_visible() {
+                            popup.process_key_events();
+                        }
+                    }
+                }));
             });
         }
     });
