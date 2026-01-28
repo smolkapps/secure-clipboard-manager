@@ -23,6 +23,31 @@ fn main() {
     info!("🚀 Clipboard Manager - Phase 4: Menu Bar UI");
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
+    // Check for existing instance using lock file
+    let lock_path = std::env::temp_dir().join("clipboard-manager.lock");
+    if lock_path.exists() {
+        // Try to read PID and check if process is still running
+        if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // Check if process exists
+                unsafe {
+                    let result = libc::kill(pid, 0);
+                    if result == 0 {
+                        info!("⚠️  Another instance is already running (PID: {}). Exiting...", pid);
+                        std::process::exit(0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Write our PID to lock file
+    let current_pid = std::process::id();
+    std::fs::write(&lock_path, current_pid.to_string())
+        .expect("Failed to write lock file");
+
+    info!("✓ Single-instance check passed (PID: {})", current_pid);
+
     // Initialize data directory
     let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -193,7 +218,55 @@ fn main() {
     let app = MenuBarApp::new(db_for_ui, encryptor_for_ui);
 
     info!("✓ Launching menu bar app...");
+    info!("✓ Starting hotkey event polling...");
     info!("");
+
+    // Start background thread that polls global hotkey events directly
+    // and dispatches toggle to main thread
+    let popup_for_polling = app.get_popup_arc();
+    std::thread::spawn(move || {
+        use global_hotkey::GlobalHotKeyEvent;
+        use std::time::{Duration, Instant};
+        use dispatch::Queue;
+
+        let mut last_toggle = Instant::now();
+        let debounce_duration = Duration::from_millis(200); // Ignore events within 200ms
+
+        loop {
+            std::thread::sleep(Duration::from_millis(50)); // Poll at 20Hz
+
+            // Check for hotkey events
+            if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+                let now = Instant::now();
+
+                // Debounce: ignore if too soon after last toggle
+                if now.duration_since(last_toggle) >= debounce_duration {
+                    log::info!("🔥 Hotkey event received: {:?}", event.id);
+                    last_toggle = now;
+
+                    // Dispatch to main thread using dispatch queue
+                    let popup_clone = Arc::clone(&popup_for_polling);
+
+                    Queue::main().exec_async(move || {
+                        if let Ok(mut popup) = popup_clone.lock() {
+                            popup.toggle();
+                        }
+                    });
+                } else {
+                    log::debug!("Ignoring duplicate hotkey event (debouncing)");
+                }
+            }
+
+            // Also process keyboard events for the popup window
+            // This allows keyboard navigation to work
+            let popup_clone = Arc::clone(&popup_for_polling);
+            Queue::main().exec_async(move || {
+                if let Ok(mut popup) = popup_clone.lock() {
+                    popup.process_key_events();
+                }
+            });
+        }
+    });
 
     // Run the app (this blocks)
     App::new("com.clipboard-manager.app", app).run();

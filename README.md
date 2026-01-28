@@ -25,12 +25,20 @@ Privacy-focused clipboard manager for macOS with automatic encryption. Built in 
 
 ## 📦 Installation
 
-### From Source (Current)
+### Option 1: Download DMG (Coming Soon)
+
+1. Download `ClipVault.dmg` from [releases](https://github.com/smolkapps/secure-clipboard-manager/releases)
+2. Open the DMG and drag ClipVault to Applications
+3. Launch ClipVault from Applications
+
+**Note**: Beta releases available soon. Currently in development.
+
+### Option 2: Build from Source
 
 ```bash
 # Clone the repository
 git clone https://github.com/smolkapps/secure-clipboard-manager.git
-cd secure-clipboard-manager
+cd secure-clipboard-manager/clipboard-manager
 
 # Build and run
 cargo build --release
@@ -39,8 +47,9 @@ cargo build --release
 
 ### Requirements
 
-- macOS 12.7.5 or later
-- Intel Mac (Apple Silicon support coming soon)
+- **macOS**: 12.7.5 or later
+- **Architecture**: Intel Mac (Apple Silicon support coming soon)
+- **For building**: Rust 1.92.0+, Xcode Command Line Tools
 
 ## 🎯 Usage
 
@@ -58,9 +67,11 @@ cargo build --release
 - ✅ Sensitive data detection
 - ✅ Image support with TIFF→PNG conversion
 - ✅ Automatic thumbnail generation (200x200px)
-- ⏳ Global hotkey - Coming soon
-- ⏳ Popup window UI - Coming soon
-- ⏳ Click-to-paste - Coming soon
+- ✅ Global hotkey (Cmd+Shift+C)
+- ✅ Popup window UI with keyboard navigation
+- ✅ Click-to-paste functionality
+
+**Phase 8 Complete**: All core features implemented!
 
 ## 🔒 Security Features
 
@@ -103,10 +114,29 @@ ClipVault automatically detects and encrypts:
 ## 🧪 Testing
 
 ```bash
-cargo test
+# Run all tests
+cargo test --all
+
+# Run specific test suite
+cargo test --test test_storage_integration
+cargo test --test test_sensitive_detection
+cargo test --test test_image_processing
+cargo test --test test_search_engine
+cargo test --test test_clipboard_monitoring
+
+# Run with output
+cargo test -- --nocapture
 ```
 
-All 28 tests passing ✅
+**Test Coverage**:
+- ✅ 50+ integration tests covering critical paths
+- ✅ Storage layer (database + encryption)
+- ✅ Sensitive data detection
+- ✅ Image processing (TIFF→PNG, thumbnails)
+- ✅ Fuzzy search engine
+- ✅ Clipboard monitoring (headless-safe)
+
+See [tests/README.md](tests/README.md) for detailed testing documentation.
 
 ## 📊 Performance
 
@@ -116,6 +146,14 @@ All 28 tests passing ✅
 - **Clipboard Detection**: 500ms polling interval
 - **Image Processing**: <50ms thumbnail generation
 - **TIFF→PNG Compression**: Typical 50-70% size reduction
+
+## 📚 Documentation
+
+- **[User Guide](docs/USER_GUIDE.md)** - Complete user documentation
+- **[Contributing Guide](CONTRIBUTING.md)** - Development setup and guidelines
+- **[Distribution Guide](DISTRIBUTION.md)** - Build, sign, and package for release
+- **[Test Documentation](tests/README.md)** - Testing guidelines and coverage
+- **[Icon Guide](resources/ICON_README.md)** - App icon requirements
 
 ## 🛠️ Development
 
@@ -129,27 +167,53 @@ Built with:
 
 ## 📝 Roadmap
 
-### ✅ Phase 7: Image Preview & Handling (COMPLETED)
-- [x] Generate thumbnails (200x200px)
-- [x] TIFF to PNG conversion
-- [x] Optimize PNG compression
-- [ ] Display image previews in UI (Phase 8)
+### ✅ Phase 8: Polish & Performance (COMPLETED)
+- [x] Global hotkey (Cmd+Shift+C)
+- [x] Popup window UI with keyboard navigation
+- [x] Click-to-paste functionality
+- [x] Performance benchmarks
 
-### Phase 8: Polish & Performance (IN PROGRESS)
-- [ ] Global hotkey (not Cmd+Shift+V - reserved for paste and match style)
-- [ ] Popup window UI
-- [ ] Click-to-paste functionality
+### Phase 9: Distribution Prep (IN PROGRESS)
+- [x] Comprehensive integration tests (50+ tests)
+- [x] User documentation (USER_GUIDE.md)
+- [x] Distribution documentation (DISTRIBUTION.md)
+- [x] DMG build script
+- [ ] App icon design
 - [ ] Performance benchmarks
+- [ ] Beta release
 
-### Phase 9: Distribution
-- [ ] DMG installer
-- [ ] Code signing
-- [ ] Notarization
-- [ ] App Store submission
+### Future Releases
+- [ ] Apple Silicon (M1/M2/M3) universal binary
+- [ ] Customizable hotkeys
+- [ ] Optional cloud sync (encrypted)
+- [ ] App exclusion list
+- [ ] Code syntax highlighting
+- [ ] Mac App Store submission
 
 ## 🤝 Contributing
 
-Contributions welcome! This is an early-stage project.
+Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup instructions
+- Code style guide
+- Testing guidelines
+- Pull request process
+
+**Quick Start for Contributors**:
+```bash
+# Clone and build
+git clone https://github.com/smolkapps/secure-clipboard-manager.git
+cd secure-clipboard-manager/clipboard-manager
+cargo build
+
+# Run tests
+cargo test --all
+
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy
+```
 
 ## 📄 License
 

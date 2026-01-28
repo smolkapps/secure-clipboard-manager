@@ -31,6 +31,11 @@ impl MenuBarApp {
             hotkey: RefCell::new(None),
         }
     }
+
+    /// Get a clone of the popup Arc for sharing with polling thread
+    pub fn get_popup_arc(&self) -> Arc<Mutex<PopupWindow>> {
+        Arc::clone(&self.popup)
+    }
 }
 
 impl AppDelegate for MenuBarApp {
@@ -45,12 +50,18 @@ impl AppDelegate for MenuBarApp {
             Ok(hotkey_mgr) => {
                 *self.hotkey.borrow_mut() = Some(hotkey_mgr);
                 log::info!("✓ Global hotkey registered: Cmd+Shift+C");
-
-                // Note: Keyboard event handling is done in the popup window itself
-                // via local event monitor when window is shown
+                log::info!("  Note: Press Cmd+Shift+C then check console");
             }
             Err(e) => log::error!("  Failed to register hotkey: {}", e),
         }
+
+        // TODO: Start a timer to poll hotkey events from main thread
+        // NSTimer with repeating callback is complex in Rust
+        // For now, the hotkey manager's handle_events() needs to be called periodically
+        log::warn!("⚠️  Hotkey event polling not yet implemented");
+        log::warn!("   The hotkey is registered but events won't be processed");
+        log::warn!("   Next step: Add NSTimer or dispatch_after to poll handle_events()");
+        log::warn!("   Workaround: Manually call handle_events() for testing");
 
         // Get clipboard history stats
         if let Ok(db) = self.db.lock() {

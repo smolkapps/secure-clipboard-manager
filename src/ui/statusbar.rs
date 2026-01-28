@@ -67,8 +67,8 @@ impl StatusBarController {
                     } else {
                         for (i, item) in items.iter().enumerate() {
                             let title = if let Some(preview) = &item.preview_text {
-                                let preview_short = if preview.len() > 50 {
-                                    format!("{}...", &preview[..50])
+                                let preview_short = if preview.chars().count() > 50 {
+                                    format!("{}...", preview.chars().take(50).collect::<String>())
                                 } else {
                                     preview.clone()
                                 };
