@@ -142,6 +142,8 @@ pub struct StatusBarController {
 impl StatusBarController {
     pub fn new(db: Arc<Mutex<Database>>, popup: Arc<Mutex<PopupWindow>>, encryptor: Arc<Mutex<Encryptor>>) -> Self {
         let _ = SHARED_DB.set(Arc::clone(&db));
+        // Also set the popup reference for keyboard event handling in popup.rs
+        let _ = crate::ui::popup::POPUP_FOR_KEYS.set(Arc::clone(&popup));
         let _ = SHARED_POPUP.set(popup);
         let _ = SHARED_ENCRYPTOR.set(encryptor);
 
