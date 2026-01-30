@@ -1,20 +1,121 @@
 // Popup window for clipboard history with native Cocoa UI
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::cell::RefCell;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::declare_class;
+use objc2::{declare_class, msg_send_id};
 use objc2::mutability::InteriorMutable;
 use objc2::ClassType;
-use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSTextViewDelegate, NSApplication, NSApplicationActivationPolicy};
-use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSObject, NSObjectProtocol};
+use objc2::DeclaredClass;
+use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSFont, NSColor};
+use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMutableAttributedString, NSRange};
+use objc2::msg_send;
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
 use dispatch::Queue;
 
-// NOTE: Custom keyboard delegate disabled temporarily due to objc2 0.5 API changes
-// Keyboard navigation will be added in a future update
-// For now, the clipboard history window works but without vim-style j/k navigation
+// Global reference to the popup so ObjC key handler can access it
+pub(crate) static POPUP_FOR_KEYS: OnceLock<Arc<Mutex<PopupWindow>>> = OnceLock::new();
+
+// Custom NSTextView subclass that intercepts key events for navigation
+declare_class!(
+    struct KeyHandlingTextView;
+
+    unsafe impl ClassType for KeyHandlingTextView {
+        type Super = NSTextView;
+        type Mutability = objc2::mutability::MainThreadOnly;
+        const NAME: &'static str = "ClipVaultKeyHandlingTextView";
+    }
+
+    impl DeclaredClass for KeyHandlingTextView {
+        type Ivars = ();
+    }
+
+    unsafe impl KeyHandlingTextView {
+        #[method(keyDown:)]
+        fn key_down(&self, event: &NSEvent) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let key_code = unsafe { event.keyCode() };
+                // Check by keyCode first: arrows, return, escape
+                // Arrow down = 125, Arrow up = 126, Return = 36, Escape = 53
+                match key_code {
+                    125 => {
+                        // Down arrow
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(popup) = popup.lock() {
+                                popup.move_selection_down();
+                            }
+                        }
+                    }
+                    126 => {
+                        // Up arrow
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(popup) = popup.lock() {
+                                popup.move_selection_up();
+                            }
+                        }
+                    }
+                    36 => {
+                        // Return/Enter - paste and close
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(mut popup) = popup.lock() {
+                                popup.paste_and_close();
+                            }
+                        }
+                    }
+                    53 => {
+                        // Escape - hide window
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(mut popup) = popup.lock() {
+                                popup.hide();
+                            }
+                        }
+                    }
+                    _ => {
+                        // Check character keys (j/k for vim-style navigation)
+                        let handled = unsafe {
+                            if let Some(chars) = event.charactersIgnoringModifiers() {
+                                let s = chars.to_string();
+                                match s.as_str() {
+                                    "j" => {
+                                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                                            if let Ok(popup) = popup.lock() {
+                                                popup.move_selection_down();
+                                            }
+                                        }
+                                        true
+                                    }
+                                    "k" => {
+                                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                                            if let Ok(popup) = popup.lock() {
+                                                popup.move_selection_up();
+                                            }
+                                        }
+                                        true
+                                    }
+                                    _ => false,
+                                }
+                            } else {
+                                false
+                            }
+                        };
+                        if !handled {
+                            // Do nothing - swallow unhandled keys to prevent beeping
+                            // (NSTextView's default keyDown: calls interpretKeyEvents:
+                            // which beeps for unhandled keys on a non-editable text view)
+                        }
+                    }
+                }
+            }));
+        }
+    }
+);
+
+impl KeyHandlingTextView {
+    fn new_with_frame(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        unsafe { msg_send_id![mtm.alloc::<Self>(), initWithFrame: frame] }
+    }
+}
 
 pub struct PopupWindow {
     db: Arc<Mutex<Database>>,
@@ -83,10 +184,10 @@ impl PopupWindow {
             | objc2_app_kit::NSAutoresizingMaskOptions::NSViewHeightSizable,
         );
 
-        // Create text view with the scroll view's content size
+        // Create custom text view (with key handling) sized to scroll view content
         let content_size = scroll_view.contentSize();
         let text_frame = NSRect::new(NSPoint::new(0.0, 0.0), content_size);
-        let text_view = NSTextView::initWithFrame(mtm.alloc(), text_frame);
+        let text_view = KeyHandlingTextView::new_with_frame(mtm, text_frame);
         text_view.setEditable(false);
         text_view.setSelectable(true);
         text_view.setAutoresizingMask(
@@ -110,10 +211,11 @@ impl PopupWindow {
 
         window.setContentView(Some(&scroll_view));
 
-        // Store text view for later updates
-        *self.text_view.borrow_mut() = Some(text_view);
+        // Store text view for later updates (cast subclass to NSTextView)
+        let text_view_as_super: Retained<NSTextView> = Retained::into_super(text_view);
+        *self.text_view.borrow_mut() = Some(text_view_as_super);
 
-        log::info!("✓ Window created (keyboard delegate temporarily disabled)");
+        log::info!("✓ Window created with keyboard navigation support");
 
         window
     }
@@ -134,43 +236,110 @@ impl PopupWindow {
         let items = self.items.borrow();
         let selected_idx = *self.selected_index.borrow();
 
-        let mut display_text = String::new();
-        display_text.push_str("📋 Clipboard History\n");
-        display_text.push_str("═══════════════════════════════════════════\n\n");
+        let text_view = self.text_view.borrow();
+        let Some(text_view) = text_view.as_ref() else { return };
 
-        if items.is_empty() {
-            display_text.push_str("No clipboard history yet.\n");
-            display_text.push_str("Copy something to get started!\n");
-        } else {
-            display_text.push_str("Navigation: ↑↓ or j/k • Enter to paste • Esc to close\n\n");
+        unsafe {
+            let mut result = NSMutableAttributedString::new();
 
-            for (i, item) in items.iter().enumerate() {
-                let marker = if i == selected_idx { "▶ " } else { "  " };
-                let icon = match item.data_type.as_str() {
-                    "image" => "🖼️",
-                    "url" => "🔗",
-                    _ => "📝",
-                };
-                let lock = if item.is_sensitive { " 🔒" } else { "" };
+            let mono_font = NSFont::monospacedSystemFontOfSize_weight(13.0, 0.0);
+            let bold_font = NSFont::monospacedSystemFontOfSize_weight(14.0, 0.3);
+            let small_font = NSFont::monospacedSystemFontOfSize_weight(11.0, 0.0);
 
-                let preview = item.preview_text.as_deref().unwrap_or("[No preview]");
-                let preview_short = if preview.chars().count() > 60 {
-                    format!("{}...", preview.chars().take(60).collect::<String>())
-                } else {
-                    preview.to_string()
-                };
+            let fg_key = NSString::from_str("NSColor");
+            let bg_key = NSString::from_str("NSBackgroundColor");
+            let font_key = NSString::from_str("NSFont");
 
-                display_text.push_str(&format!("{}{} {}{}\n", marker, icon, preview_short, lock));
+            // Header
+            Self::append_styled_line(
+                &mut result, "  Clipboard History\n",
+                &bold_font, &NSColor::labelColor(), None, &font_key, &fg_key, &bg_key,
+            );
+            Self::append_styled_line(
+                &mut result, "  ↑↓/j/k navigate • Enter paste • Esc close\n\n",
+                &small_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
+            );
+
+            if items.is_empty() {
+                Self::append_styled_line(
+                    &mut result, "  No clipboard history yet.\n  Copy something to get started!\n",
+                    &mono_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
+                );
+            } else {
+                for (i, item) in items.iter().enumerate() {
+                    let is_selected = i == selected_idx;
+                    let icon = match item.data_type.as_str() {
+                        "image" => "🖼️",
+                        "url" => "🔗",
+                        _ => "📝",
+                    };
+                    let lock = if item.is_sensitive { " 🔒" } else { "" };
+
+                    let preview = item.preview_text.as_deref().unwrap_or("[No preview]");
+                    let preview_short = if preview.chars().count() > 70 {
+                        format!("{}...", preview.chars().take(70).collect::<String>())
+                    } else {
+                        preview.to_string()
+                    };
+
+                    let marker = if is_selected { "▶" } else { " " };
+                    let line = format!(" {} {} {}{}\n", marker, icon, preview_short, lock);
+
+                    let bg_color = if is_selected {
+                        Some(NSColor::selectedContentBackgroundColor())
+                    } else if i % 2 == 1 {
+                        Some(NSColor::controlBackgroundColor())
+                    } else {
+                        None
+                    };
+
+                    let fg_color = if is_selected {
+                        NSColor::selectedMenuItemTextColor()
+                    } else {
+                        NSColor::labelColor()
+                    };
+
+                    Self::append_styled_line(
+                        &mut result, &line,
+                        &mono_font, &fg_color, bg_color.as_deref(), &font_key, &fg_key, &bg_key,
+                    );
+                }
+            }
+
+            // Replace text storage contents
+            if let Some(mut storage) = text_view.textStorage() {
+                let full_range = NSRange::new(0, storage.length());
+                storage.replaceCharactersInRange_withAttributedString(full_range, &result);
             }
         }
+    }
 
-        // Update text view
-        if let Some(text_view) = self.text_view.borrow().as_ref() {
-            unsafe {
-                let ns_string = NSString::from_str(&display_text);
-                text_view.setString(&ns_string);
-            }
+    unsafe fn append_styled_line(
+        result: &mut NSMutableAttributedString,
+        text: &str,
+        font: &NSFont,
+        fg_color: &NSColor,
+        bg_color: Option<&NSColor>,
+        font_key: &NSString,
+        fg_key: &NSString,
+        bg_key: &NSString,
+    ) {
+        let ns_str = NSString::from_str(text);
+        let line_attr = NSMutableAttributedString::initWithString(
+            objc2_foundation::NSMutableAttributedString::alloc(),
+            &ns_str,
+        );
+        let range = NSRange::new(0, ns_str.length());
+
+        // Set attributes using msg_send! since addAttribute:value:range: takes id values
+        let _: () = msg_send![&line_attr, addAttribute: font_key, value: font, range: range];
+        let _: () = msg_send![&line_attr, addAttribute: fg_key, value: fg_color, range: range];
+
+        if let Some(bg) = bg_color {
+            let _: () = msg_send![&line_attr, addAttribute: bg_key, value: bg, range: range];
         }
+
+        result.appendAttributedString(&line_attr);
     }
 
     pub fn toggle(&mut self) {
@@ -218,6 +387,33 @@ impl PopupWindow {
                         POLICY_SET.store(true, Ordering::Relaxed);
                     }
 
+                    // Position window near the mouse cursor
+                    let mouse_loc = NSEvent::mouseLocation();
+                    let win_size = window.frame().size;
+                    let cursor_offset = 10.0;
+                    let mut top_left_x = mouse_loc.x + cursor_offset;
+                    let mut top_left_y = mouse_loc.y + cursor_offset;
+                    if let Some(screen) = NSScreen::mainScreen(mtm) {
+                        let sf = screen.visibleFrame();
+                        let smin_x = sf.origin.x;
+                        let smin_y = sf.origin.y;
+                        let smax_x = smin_x + sf.size.width;
+                        let smax_y = smin_y + sf.size.height;
+                        if top_left_x + win_size.width > smax_x {
+                            top_left_x = mouse_loc.x - win_size.width - cursor_offset;
+                        }
+                        if top_left_y > smax_y {
+                            top_left_y = smax_y;
+                        }
+                        if top_left_y - win_size.height < smin_y {
+                            top_left_y = smin_y + win_size.height;
+                        }
+                        if top_left_x < smin_x {
+                            top_left_x = smin_x;
+                        }
+                    }
+                    window.setFrameTopLeftPoint(NSPoint::new(top_left_x, top_left_y));
+
                     // Make window visible and bring to front
                     window.makeKeyAndOrderFront(None);
                     window.orderFrontRegardless();
@@ -226,7 +422,8 @@ impl PopupWindow {
                     #[allow(deprecated)]
                     app.activateIgnoringOtherApps(true);
 
-                    log::info!("Window visible: {}", window.isVisible());
+                    log::info!("Window visible: {}, near cursor ({}, {})",
+                        window.isVisible(), top_left_x, top_left_y);
                 } else {
                     log::error!("Window is None, cannot show!");
                 }
@@ -324,8 +521,8 @@ impl PopupWindow {
     }
 
     /// Process any pending keyboard events (call this periodically from main thread)
-    /// NOTE: Temporarily disabled - keyboard navigation will be re-added in future update
+    /// Note: Keyboard events are now handled directly by KeyHandlingTextView's keyDown: override.
     pub fn process_key_events(&mut self) {
-        // Keyboard event processing temporarily disabled
+        // Keyboard events are handled by KeyHandlingTextView's keyDown: override
     }
 }
