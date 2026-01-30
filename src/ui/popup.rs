@@ -6,7 +6,7 @@ use objc2::runtime::AnyObject;
 use objc2::declare_class;
 use objc2::mutability::InteriorMutable;
 use objc2::ClassType;
-use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSTextViewDelegate};
+use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSTextViewDelegate, NSApplication, NSApplicationActivationPolicy};
 use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSObject, NSObjectProtocol};
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
@@ -67,7 +67,9 @@ impl PopupWindow {
         window.setTitle(&NSString::from_str("Clipboard History"));
         window.center();
         window.setLevel(3); // NSFloatingWindowLevel
-        window.setHidesOnDeactivate(true);
+        // Do NOT set setHidesOnDeactivate(true) - in a menu bar app (accessory
+        // activation policy), the app is never truly "active", so the window
+        // would immediately hide itself after being shown.
 
         // Allow window to receive keyboard events
         window.setAcceptsMouseMovedEvents(true);
@@ -181,18 +183,24 @@ impl PopupWindow {
                 if let Some(window) = self.window.borrow().as_ref() {
                     log::info!("Calling makeKeyAndOrderFront on window");
 
+                    // For a menu bar app to show windows, we must temporarily set
+                    // the activation policy to Regular (or at least Accessory).
+                    // Without this, makeKeyAndOrderFront silently does nothing.
+                    let app = NSApplication::sharedApplication(mtm);
+                    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
                     // Make window visible and bring to front
                     window.makeKeyAndOrderFront(None);
                     window.orderFrontRegardless();
 
+                    // Activate the app so it comes to the foreground.
+                    // Use objc2 msg_send! to call activateIgnoringOtherApps: which
+                    // works on macOS 12+ (the modern activate() requires macOS 14).
+                    let _: () = objc2::msg_send![&app, activateIgnoringOtherApps: true];
+
                     // Check if window is visible
                     let is_visible = window.isVisible();
                     log::info!("Window visibility after makeKeyAndOrderFront: {}", is_visible);
-
-                    // Try to activate the app
-                    use objc2_app_kit::NSApplication;
-                    let app = NSApplication::sharedApplication(mtm);
-                    app.activate();
 
                     log::info!("Window should now be visible and app activated");
                 } else {

@@ -9,6 +9,7 @@ use crate::ui::hotkey::HotkeyManager;
 
 pub struct MenuBarApp {
     db: Arc<Mutex<Database>>,
+    encryptor: Arc<Mutex<Encryptor>>,
     popup: Arc<Mutex<PopupWindow>>,
     status_bar: RefCell<Option<StatusBarController>>,
     hotkey: RefCell<Option<HotkeyManager>>,
@@ -26,6 +27,7 @@ impl MenuBarApp {
 
         MenuBarApp {
             db: db_arc,
+            encryptor: enc_arc,
             popup,
             status_bar: RefCell::new(None),
             hotkey: RefCell::new(None),
@@ -42,8 +44,12 @@ impl AppDelegate for MenuBarApp {
     fn did_finish_launching(&self) {
         log::info!("✓ Menu bar app launched");
 
-        // Create status bar icon
-        *self.status_bar.borrow_mut() = Some(StatusBarController::new(Arc::clone(&self.db)));
+        // Create status bar icon (pass popup and encryptor so menu items can trigger it)
+        *self.status_bar.borrow_mut() = Some(StatusBarController::new(
+            Arc::clone(&self.db),
+            Arc::clone(&self.popup),
+            Arc::clone(&self.encryptor),
+        ));
 
         // Register global hotkey
         match HotkeyManager::new(Arc::clone(&self.popup)) {
