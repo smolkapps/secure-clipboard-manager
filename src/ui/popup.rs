@@ -168,6 +168,7 @@ impl PopupWindow {
         window.setTitle(&NSString::from_str("Clipboard History"));
         window.center();
         window.setLevel(3); // NSFloatingWindowLevel
+        window.setReleasedWhenClosed(false); // Prevent dealloc when red X is clicked
         // Do NOT set setHidesOnDeactivate(true) - in a menu bar app (accessory
         // activation policy), the app is never truly "active", so the window
         // would immediately hide itself after being shown.
@@ -343,6 +344,14 @@ impl PopupWindow {
     }
 
     pub fn toggle(&mut self) {
+        // Sync visible state with actual window visibility
+        // (handles case where user closed window via red X button)
+        if let Some(window) = self.window.borrow().as_ref() {
+            unsafe {
+                self.visible = window.isVisible();
+            }
+        }
+
         self.visible = !self.visible;
 
         if self.visible {
@@ -418,6 +427,11 @@ impl PopupWindow {
                     window.makeKeyAndOrderFront(None);
                     window.orderFrontRegardless();
 
+                    // Make text view first responder so it receives key events
+                    if let Some(tv) = self.text_view.borrow().as_ref() {
+                        window.makeFirstResponder(Some(tv));
+                    }
+
                     // Activate the app so it comes to the foreground
                     #[allow(deprecated)]
                     app.activateIgnoringOtherApps(true);
@@ -445,7 +459,13 @@ impl PopupWindow {
     }
 
     pub fn is_visible(&self) -> bool {
-        self.visible
+        // Check actual window visibility to stay in sync
+        // (user may have closed via red X button)
+        if let Some(window) = self.window.borrow().as_ref() {
+            unsafe { window.isVisible() }
+        } else {
+            self.visible
+        }
     }
 
     pub fn move_selection_down(&self) {
