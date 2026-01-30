@@ -64,6 +64,13 @@ fn main() {
     info!("  Items in history: {}", db.count_items().unwrap_or(0));
     info!("  Database size: {} KB", db.get_db_size().unwrap_or(0) / 1024);
 
+    // Purge soft-deleted items older than 7 days
+    match db.purge_deleted_items() {
+        Ok(0) => {}
+        Ok(n) => info!("  Purged {} expired deleted items", n),
+        Err(e) => log::error!("  Failed to purge deleted items: {}", e),
+    }
+
     // Initialize encryptor
     let key_path = data_dir.join("encryption.key");
     let encryptor = Encryptor::new(key_path)

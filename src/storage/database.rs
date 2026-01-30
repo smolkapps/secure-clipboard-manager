@@ -70,6 +70,39 @@ impl Database {
             [],
         )?;
 
+        // Create deleted_items table (soft-delete trash, mirrors clipboard_items)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS deleted_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_id INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                deleted_at INTEGER NOT NULL,
+                data_type TEXT NOT NULL,
+                is_sensitive BOOLEAN DEFAULT 0,
+                is_encrypted BOOLEAN DEFAULT 0,
+                preview_text TEXT,
+                data_size INTEGER,
+                deleted_blob_id INTEGER,
+                metadata TEXT
+            )",
+            [],
+        )?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deleted_at
+             ON deleted_items(deleted_at)",
+            [],
+        )?;
+
+        // Create deleted_data table (blob storage for soft-deleted items)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS deleted_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data BLOB NOT NULL
+            )",
+            [],
+        )?;
+
         // Create config table
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS config (
@@ -214,6 +247,99 @@ impl Database {
         }
 
         Ok(deleted_items)
+    }
+
+    /// Soft-delete all clipboard items (move to deleted_items/deleted_data tables)
+    pub fn soft_delete_all_items(&self) -> Result<usize> {
+        let now = chrono::Utc::now().timestamp();
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Get all items with their blob IDs (scope stmt so it's dropped before commit)
+        let items: Vec<(i64, i64, String, bool, bool, Option<String>, i64, i64, Option<String>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, timestamp, data_type, is_sensitive, is_encrypted,
+                        preview_text, data_size, data_blob_id, metadata
+                 FROM clipboard_items"
+            )?;
+            let result = stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?,
+                ))
+            })?.collect::<Result<Vec<_>>>()?;
+            result
+        };
+
+        let count = items.len();
+        if count == 0 {
+            tx.commit()?;
+            return Ok(0);
+        }
+
+        for (id, timestamp, data_type, is_sensitive, is_encrypted, preview_text, data_size, blob_id, metadata) in &items {
+            // Copy blob data to deleted_data
+            let blob_data: Vec<u8> = tx.query_row(
+                "SELECT data FROM clipboard_data WHERE id = ?1",
+                params![blob_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO deleted_data (data) VALUES (?1)",
+                params![blob_data],
+            )?;
+            let deleted_blob_id = tx.last_insert_rowid();
+
+            // Copy item to deleted_items
+            tx.execute(
+                "INSERT INTO deleted_items
+                 (original_id, timestamp, deleted_at, data_type, is_sensitive, is_encrypted,
+                  preview_text, data_size, deleted_blob_id, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![id, timestamp, now, data_type, is_sensitive, is_encrypted,
+                        preview_text, data_size, deleted_blob_id, metadata],
+            )?;
+        }
+
+        // Delete originals
+        let blob_ids: Vec<i64> = items.iter().map(|i| i.7).collect();
+        tx.execute("DELETE FROM clipboard_items", [])?;
+        for blob_id in blob_ids {
+            tx.execute("DELETE FROM clipboard_data WHERE id = ?1", params![blob_id])?;
+        }
+
+        tx.commit()?;
+        info!("🗑️  Soft-deleted {} clipboard items (recoverable for 7 days)", count);
+        Ok(count)
+    }
+
+    /// Permanently purge deleted items older than 7 days
+    pub fn purge_deleted_items(&self) -> Result<usize> {
+        let cutoff = chrono::Utc::now().timestamp() - (7 * 86400);
+
+        // Get blob IDs of expired deleted items
+        let mut stmt = self.conn.prepare(
+            "SELECT deleted_blob_id FROM deleted_items WHERE deleted_at < ?1"
+        )?;
+        let blob_ids: Vec<i64> = stmt.query_map(params![cutoff], |row| {
+            row.get(0)
+        })?.collect::<Result<Vec<_>>>()?;
+
+        let purged = self.conn.execute(
+            "DELETE FROM deleted_items WHERE deleted_at < ?1",
+            params![cutoff],
+        )?;
+
+        for blob_id in blob_ids {
+            self.conn.execute(
+                "DELETE FROM deleted_data WHERE id = ?1",
+                params![blob_id],
+            )?;
+        }
+
+        if purged > 0 {
+            info!("🗑️  Purged {} expired deleted items (older than 7 days)", purged);
+        }
+        Ok(purged)
     }
 
     /// Get total item count
