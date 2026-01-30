@@ -72,6 +72,20 @@ declare_class!(
                         }
                     }
                     _ => {
+                        // Check for modifier keys (Cmd+C etc.) - forward to super
+                        let has_cmd = unsafe {
+                            event.modifierFlags().contains(
+                                objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand
+                            )
+                        };
+                        if has_cmd {
+                            // Forward Cmd+key combos (like Cmd+C) to NSTextView
+                            unsafe {
+                                let _: () = objc2::msg_send![super(self), keyDown: event];
+                            }
+                            return;
+                        }
+
                         // Check character keys (j/k for vim-style navigation)
                         let handled = unsafe {
                             if let Some(chars) = event.charactersIgnoringModifiers() {
@@ -100,9 +114,7 @@ declare_class!(
                             }
                         };
                         if !handled {
-                            // Do nothing - swallow unhandled keys to prevent beeping
-                            // (NSTextView's default keyDown: calls interpretKeyEvents:
-                            // which beeps for unhandled keys on a non-editable text view)
+                            // Swallow unhandled keys to prevent beeping
                         }
                     }
                 }
@@ -459,13 +471,7 @@ impl PopupWindow {
     }
 
     pub fn is_visible(&self) -> bool {
-        // Check actual window visibility to stay in sync
-        // (user may have closed via red X button)
-        if let Some(window) = self.window.borrow().as_ref() {
-            unsafe { window.isVisible() }
-        } else {
-            self.visible
-        }
+        self.visible
     }
 
     pub fn move_selection_down(&self) {
