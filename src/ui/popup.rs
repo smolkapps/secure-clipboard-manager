@@ -74,14 +74,37 @@ impl PopupWindow {
         // Allow window to receive keyboard events
         window.setAcceptsMouseMovedEvents(true);
 
-        // Create text view for displaying items
+        // Create scroll view sized to the window content area
         let scroll_view = NSScrollView::new(mtm);
         scroll_view.setHasVerticalScroller(true);
         scroll_view.setFrame(content_rect);
+        scroll_view.setAutoresizingMask(
+            objc2_app_kit::NSAutoresizingMaskOptions::NSViewWidthSizable
+            | objc2_app_kit::NSAutoresizingMaskOptions::NSViewHeightSizable,
+        );
 
-        let text_view = NSTextView::new(mtm);
+        // Create text view with the scroll view's content size
+        let content_size = scroll_view.contentSize();
+        let text_frame = NSRect::new(NSPoint::new(0.0, 0.0), content_size);
+        let text_view = NSTextView::initWithFrame(mtm.alloc(), text_frame);
         text_view.setEditable(false);
         text_view.setSelectable(true);
+        text_view.setAutoresizingMask(
+            objc2_app_kit::NSAutoresizingMaskOptions::NSViewWidthSizable,
+        );
+
+        // Configure text view for readability
+        if let Some(container) = text_view.textContainer() {
+            container.setWidthTracksTextView(true);
+        }
+        text_view.setMinSize(NSSize::new(0.0, content_size.height));
+        text_view.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
+        text_view.setVerticallyResizable(true);
+        text_view.setHorizontallyResizable(false);
+
+        // Set font size
+        let font = objc2_app_kit::NSFont::monospacedSystemFontOfSize_weight(13.0, 0.0);
+        text_view.setFont(Some(&font));
 
         scroll_view.setDocumentView(Some(&text_view));
 
@@ -183,26 +206,27 @@ impl PopupWindow {
                 if let Some(window) = self.window.borrow().as_ref() {
                     log::info!("Calling makeKeyAndOrderFront on window");
 
-                    // For a menu bar app to show windows, we must temporarily set
-                    // the activation policy to Regular (or at least Accessory).
-                    // Without this, makeKeyAndOrderFront silently does nothing.
                     let app = NSApplication::sharedApplication(mtm);
-                    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+                    // Set activation policy to Accessory once (allows windows
+                    // without a dock icon). Only set on first show to avoid
+                    // conflicting with cacao's activation policy management.
+                    use std::sync::atomic::{AtomicBool, Ordering};
+                    static POLICY_SET: AtomicBool = AtomicBool::new(false);
+                    if !POLICY_SET.load(Ordering::Relaxed) {
+                        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+                        POLICY_SET.store(true, Ordering::Relaxed);
+                    }
 
                     // Make window visible and bring to front
                     window.makeKeyAndOrderFront(None);
                     window.orderFrontRegardless();
 
-                    // Activate the app so it comes to the foreground.
-                    // Use objc2 msg_send! to call activateIgnoringOtherApps: which
-                    // works on macOS 12+ (the modern activate() requires macOS 14).
-                    let _: () = objc2::msg_send![&app, activateIgnoringOtherApps: true];
+                    // Activate the app so it comes to the foreground
+                    #[allow(deprecated)]
+                    app.activateIgnoringOtherApps(true);
 
-                    // Check if window is visible
-                    let is_visible = window.isVisible();
-                    log::info!("Window visibility after makeKeyAndOrderFront: {}", is_visible);
-
-                    log::info!("Window should now be visible and app activated");
+                    log::info!("Window visible: {}", window.isVisible());
                 } else {
                     log::error!("Window is None, cannot show!");
                 }
