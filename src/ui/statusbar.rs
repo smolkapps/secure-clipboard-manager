@@ -99,39 +99,41 @@ declare_class!(
         #[method(clearHistory:)]
         fn clear_history(&self, _sender: &AnyObject) {
             log::info!("Clear History clicked");
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                unsafe {
-                    // Show confirmation dialog
-                    let mtm = MainThreadMarker::new()
-                        .expect("clearHistory: must be called on main thread");
-                    let alert = NSAlert::new(mtm);
-                    alert.setAlertStyle(NSAlertStyle::Warning);
-                    alert.setMessageText(&NSString::from_str(
-                        "Clear All Clipboard History?"
-                    ));
-                    alert.setInformativeText(&NSString::from_str(
-                        "This will remove all items from your clipboard history. \
-                         Deleted items can be recovered for up to 7 days."
-                    ));
-                    alert.addButtonWithTitle(&NSString::from_str("Clear History"));
-                    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+            // Defer alert to after menu closes — runModal() conflicts with
+            // the status bar menu's own modal tracking loop, causing a freeze.
+            dispatch::Queue::main().exec_async(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    unsafe {
+                        let mtm = MainThreadMarker::new()
+                            .expect("must be on main thread");
+                        let alert = NSAlert::new(mtm);
+                        alert.setAlertStyle(NSAlertStyle::Warning);
+                        alert.setMessageText(&NSString::from_str(
+                            "Clear All Clipboard History?"
+                        ));
+                        alert.setInformativeText(&NSString::from_str(
+                            "This will remove all items from your clipboard history."
+                        ));
+                        alert.addButtonWithTitle(&NSString::from_str("Clear History"));
+                        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-                    let response = alert.runModal();
-                    if response == NSAlertFirstButtonReturn {
-                        log::info!("   User confirmed clear");
-                        if let Some(db_arc) = SHARED_DB.get() {
-                            if let Ok(db) = db_arc.lock() {
-                                match db.soft_delete_all_items() {
-                                    Ok(count) => log::info!("   Soft-deleted {} items", count),
-                                    Err(e) => log::error!("   Failed to clear: {}", e),
+                        let response = alert.runModal();
+                        if response == NSAlertFirstButtonReturn {
+                            log::info!("   User confirmed clear");
+                            if let Some(db_arc) = SHARED_DB.get() {
+                                if let Ok(db) = db_arc.lock() {
+                                    match db.soft_delete_all_items() {
+                                        Ok(count) => log::info!("   Soft-deleted {} items", count),
+                                        Err(e) => log::error!("   Failed to clear: {}", e),
+                                    }
                                 }
                             }
+                        } else {
+                            log::info!("   User cancelled clear");
                         }
-                    } else {
-                        log::info!("   User cancelled clear");
                     }
-                }
-            }));
+                }));
+            });
         }
 
         /// Called by macOS each time the menu is about to be displayed.
