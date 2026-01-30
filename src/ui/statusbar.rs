@@ -33,12 +33,17 @@ declare_class!(
     unsafe impl MenuTarget {
         #[method(showHistory:)]
         fn show_history(&self, _sender: &AnyObject) {
-            log::info!("Show History menu item clicked");
-            if let Some(popup) = SHARED_POPUP.get() {
-                if let Ok(mut popup) = popup.lock() {
-                    popup.show();
+            log::info!("Show/Hide History menu item clicked");
+            // catch_unwind prevents panics from unwinding across ObjC boundary
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Some(popup) = SHARED_POPUP.get() {
+                    if let Ok(mut popup) = popup.lock() {
+                        popup.toggle();
+                    } else {
+                        log::error!("Popup mutex poisoned");
+                    }
                 }
-            }
+            }));
         }
 
         #[method(pasteItem:)]
@@ -177,8 +182,17 @@ impl StatusBarController {
         target: &MenuTarget,
         mtm: MainThreadMarker,
     ) {
-        // Show All History - wired to showHistory: action
-        Self::add_action_item(menu, "Show All History", Some("h"), sel!(showHistory:), target, mtm);
+        // Toggle history window - label reflects current state
+        let history_label = if let Some(popup_arc) = SHARED_POPUP.get() {
+            if let Ok(popup) = popup_arc.lock() {
+                if popup.is_visible() { "Hide History Window" } else { "Show All History" }
+            } else {
+                "Show All History"
+            }
+        } else {
+            "Show All History"
+        };
+        Self::add_action_item(menu, history_label, Some("h"), sel!(showHistory:), target, mtm);
         Self::add_separator(menu, mtm);
 
         // Recent clipboard items - wired to pasteItem: action
