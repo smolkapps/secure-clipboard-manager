@@ -51,6 +51,18 @@ cargo build --release
 - **Architecture**: Intel Mac (Apple Silicon support coming soon)
 - **For building**: Rust 1.92.0+, Xcode Command Line Tools
 
+## 🛡️ Why Direct Distribution?
+
+ClipVault is distributed as a signed and notarized macOS app (Developer ID) rather than through the Mac App Store. This is a deliberate choice to preserve full functionality.
+
+**The core issue: Mac App Store apps must run in Apple's sandbox, which blocks the features that make a clipboard manager useful.**
+
+- **Click-to-paste is impossible in the sandbox.** ClipVault pastes items into your active app by simulating Cmd+V through the Accessibility API. Sandboxed apps are explicitly prohibited from using this API or sending keystrokes to other applications — this is a hard platform restriction with no workaround.
+- **Clipboard monitoring faces new friction.** Starting with macOS 16, apps that read the clipboard without a user-initiated paste trigger a system permission prompt. While users can grant permanent access, this adds friction that degrades the experience for a tool you rely on hundreds of times a day.
+- **No compromises.** A Mac App Store version would require removing click-to-paste entirely, reducing ClipVault to a clipboard viewer rather than a clipboard manager. We chose to ship the full experience instead.
+
+ClipVault is signed with an Apple Developer ID certificate and notarized by Apple, which means macOS verifies it is free of known malware before you run it. You get the same security checks as App Store apps without the functional limitations.
+
 ## 🎯 Usage
 
 1. **Launch**: Run the app and look for the 📋 icon in your menu bar
@@ -188,7 +200,7 @@ Built with:
 - [ ] Optional cloud sync (encrypted)
 - [ ] App exclusion list
 - [ ] Code syntax highlighting
-- [ ] Mac App Store submission
+- [ ] Evaluate limited Mac App Store version (sandbox restrictions prevent click-to-paste; see [Why Direct Distribution?](#-why-direct-distribution))
 
 ## 🤝 Contributing
 
