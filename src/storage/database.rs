@@ -342,6 +342,49 @@ impl Database {
         Ok(purged)
     }
 
+    /// Remove existing items that match the given preview_text and data_type (deduplication).
+    /// Skips dedup when preview_text is None (can't reliably compare NULL values).
+    /// Returns the count of removed duplicates.
+    pub fn remove_duplicates(&self, preview_text: Option<&str>, data_type: &str) -> Result<usize> {
+        let preview = match preview_text {
+            Some(t) => t,
+            None => return Ok(0),
+        };
+
+        // Find matching items and their blob IDs
+        let mut stmt = self.conn.prepare(
+            "SELECT id, data_blob_id FROM clipboard_items
+             WHERE preview_text = ?1 AND data_type = ?2"
+        )?;
+
+        let matches: Vec<(i64, i64)> = stmt.query_map(params![preview, data_type], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?.collect::<Result<Vec<_>>>()?;
+
+        if matches.is_empty() {
+            return Ok(0);
+        }
+
+        // Delete the items and their blobs
+        for (item_id, blob_id) in &matches {
+            self.conn.execute(
+                "DELETE FROM clipboard_items WHERE id = ?1",
+                params![item_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM clipboard_data WHERE id = ?1",
+                params![blob_id],
+            )?;
+        }
+
+        let count = matches.len();
+        if count > 0 {
+            info!("♻️  Removed {} duplicate(s) for {:?}", count, preview);
+        }
+
+        Ok(count)
+    }
+
     /// Get total item count
     pub fn count_items(&self) -> Result<i64> {
         let count: i64 = self.conn.query_row(
