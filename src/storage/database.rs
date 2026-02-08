@@ -112,6 +112,12 @@ impl Database {
             [],
         )?;
 
+        // Migration: add copy_count column (ignore error if column already exists)
+        let _ = self.conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN copy_count INTEGER DEFAULT 1",
+            [],
+        );
+
         // Set schema version
         self.conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
@@ -169,11 +175,12 @@ impl Database {
         data_size: i64,
         data_blob_id: i64,
         metadata: Option<&str>,
+        copy_count: i64,
     ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO clipboard_items
-             (timestamp, data_type, is_sensitive, is_encrypted, preview_text, data_size, data_blob_id, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (timestamp, data_type, is_sensitive, is_encrypted, preview_text, data_size, data_blob_id, metadata, copy_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 timestamp,
                 data_type,
@@ -183,6 +190,7 @@ impl Database {
                 data_size,
                 data_blob_id,
                 metadata,
+                copy_count,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -192,7 +200,8 @@ impl Database {
     pub fn get_recent_items(&self, limit: i32) -> Result<Vec<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, data_type, is_sensitive, is_encrypted,
-                    preview_text, data_size, data_blob_id, metadata
+                    preview_text, data_size, data_blob_id, metadata,
+                    COALESCE(copy_count, 1)
              FROM clipboard_items
              ORDER BY timestamp DESC
              LIMIT ?1"
@@ -209,6 +218,7 @@ impl Database {
                 data_size: row.get(6)?,
                 data_blob_id: row.get(7)?,
                 metadata: row.get(8)?,
+                copy_count: row.get(9)?,
             })
         })?;
 
@@ -344,29 +354,31 @@ impl Database {
 
     /// Remove existing items that match the given preview_text and data_type (deduplication).
     /// Skips dedup when preview_text is None (can't reliably compare NULL values).
-    /// Returns the count of removed duplicates.
-    pub fn remove_duplicates(&self, preview_text: Option<&str>, data_type: &str) -> Result<usize> {
+    /// Returns (removed_count, max_copy_count) so the caller can increment the count.
+    pub fn remove_duplicates(&self, preview_text: Option<&str>, data_type: &str) -> Result<(usize, i64)> {
         let preview = match preview_text {
             Some(t) => t,
-            None => return Ok(0),
+            None => return Ok((0, 0)),
         };
 
-        // Find matching items and their blob IDs
+        // Find matching items, their blob IDs, and copy counts
         let mut stmt = self.conn.prepare(
-            "SELECT id, data_blob_id FROM clipboard_items
+            "SELECT id, data_blob_id, COALESCE(copy_count, 1) FROM clipboard_items
              WHERE preview_text = ?1 AND data_type = ?2"
         )?;
 
-        let matches: Vec<(i64, i64)> = stmt.query_map(params![preview, data_type], |row| {
-            Ok((row.get(0)?, row.get(1)?))
+        let matches: Vec<(i64, i64, i64)> = stmt.query_map(params![preview, data_type], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?.collect::<Result<Vec<_>>>()?;
 
         if matches.is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
 
+        let max_copy_count = matches.iter().map(|m| m.2).max().unwrap_or(0);
+
         // Delete the items and their blobs
-        for (item_id, blob_id) in &matches {
+        for (item_id, blob_id, _) in &matches {
             self.conn.execute(
                 "DELETE FROM clipboard_items WHERE id = ?1",
                 params![item_id],
@@ -379,10 +391,10 @@ impl Database {
 
         let count = matches.len();
         if count > 0 {
-            info!("♻️  Removed {} duplicate(s) for {:?}", count, preview);
+            info!("♻️  Removed {} duplicate(s) for {:?} (prev count: {})", count, preview, max_copy_count);
         }
 
-        Ok(count)
+        Ok((count, max_copy_count))
     }
 
     /// Get total item count
@@ -425,4 +437,5 @@ pub struct ClipboardItem {
     pub data_size: i64,
     pub data_blob_id: i64,
     pub metadata: Option<String>,
+    pub copy_count: i64,
 }

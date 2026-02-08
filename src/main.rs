@@ -165,12 +165,16 @@ fn main() {
                     // Store to database
                     if let Ok(db) = db_clone.lock() {
                         // Remove existing duplicates before inserting the new entry
-                        if let Err(e) = db.remove_duplicates(
+                        let prev_copy_count = match db.remove_duplicates(
                             processed.preview_text.as_deref(),
                             processed.data_type.as_str(),
                         ) {
-                            error!("   ✗ Failed to remove duplicates: {}", e);
-                        }
+                            Ok((_removed, prev_count)) => prev_count,
+                            Err(e) => {
+                                error!("   ✗ Failed to remove duplicates: {}", e);
+                                0
+                            }
+                        };
 
                         match db.store_blob(&blob_data) {
                             Ok(blob_id) => {
@@ -184,6 +188,7 @@ fn main() {
                                     processed.blob.len() as i64,
                                     blob_id,
                                     processed.metadata.as_deref(),
+                                    prev_copy_count + 1,
                                 ) {
                                     Ok(item_id) => {
                                         let sensitive_marker = if processed.is_sensitive { " 🔒" } else { "" };

@@ -292,8 +292,14 @@ impl PopupWindow {
                         preview.to_string()
                     };
 
+                    let count_badge = if item.copy_count > 1 {
+                        format!(" (×{})", item.copy_count)
+                    } else {
+                        String::new()
+                    };
+
                     let marker = if is_selected { "▶" } else { " " };
-                    let line = format!(" {} {} {}{}\n", marker, icon, preview_short, lock);
+                    let line = format!(" {} {} {}{}{}\n", marker, icon, preview_short, count_badge, lock);
 
                     let bg_color = if is_selected {
                         Some(NSColor::selectedContentBackgroundColor())
