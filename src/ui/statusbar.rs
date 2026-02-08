@@ -253,7 +253,12 @@ impl StatusBarController {
                                         preview.clone()
                                     };
                                     let lock = if item.is_sensitive { " 🔒" } else { "" };
-                                    format!("{}{}", short, lock)
+                                    let count = if item.copy_count > 1 {
+                                        format!(" (×{})", item.copy_count)
+                                    } else {
+                                        String::new()
+                                    };
+                                    format!("{}{}{}", short, count, lock)
                                 }
                                 None => format!("{} item", item.data_type),
                             };
