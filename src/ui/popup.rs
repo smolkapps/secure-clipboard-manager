@@ -1,5 +1,6 @@
 // Popup window for clipboard history with native Cocoa UI
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::cell::RefCell;
 use objc2::rc::Retained;
 use objc2::{declare_class, msg_send_id};
@@ -134,6 +135,7 @@ pub struct PopupWindow {
     items: RefCell<Vec<ClipboardItem>>,
     selected_index: RefCell<usize>,
     visible: bool,
+    auto_refresh_active: Arc<AtomicBool>,
 }
 
 // SAFETY: PopupWindow contains NSWindow which is !Send, but we only access it
@@ -153,6 +155,7 @@ impl PopupWindow {
             items: RefCell::new(Vec::new()),
             selected_index: RefCell::new(0),
             visible: false,
+            auto_refresh_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -230,12 +233,19 @@ impl PopupWindow {
         window
     }
 
-    fn load_items(&self) {
+    fn load_items(&self, reset_selection: bool) {
         if let Ok(db) = self.db.lock() {
             match db.get_recent_items(20) {
                 Ok(items) => {
+                    if reset_selection {
+                        *self.selected_index.borrow_mut() = 0;
+                    } else {
+                        let mut idx = self.selected_index.borrow_mut();
+                        if *idx >= items.len() {
+                            *idx = if items.is_empty() { 0 } else { items.len() - 1 };
+                        }
+                    }
                     *self.items.borrow_mut() = items;
-                    *self.selected_index.borrow_mut() = 0;
                 }
                 Err(e) => log::error!("Failed to load items: {}", e),
             }
@@ -390,8 +400,32 @@ impl PopupWindow {
                 }
 
                 // Load and display items
-                self.load_items();
+                self.load_items(true);
                 self.refresh_display();
+
+                // Start auto-refresh thread (refreshes every 1s while popup is open)
+                if !self.auto_refresh_active.load(Ordering::Relaxed) {
+                    self.auto_refresh_active.store(true, Ordering::Relaxed);
+                    let active = Arc::clone(&self.auto_refresh_active);
+                    std::thread::spawn(move || {
+                        while active.load(Ordering::Relaxed) {
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            if !active.load(Ordering::Relaxed) { break; }
+                            let active_inner = Arc::clone(&active);
+                            dispatch::Queue::main().exec_async(move || {
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    if !active_inner.load(Ordering::Relaxed) { return; }
+                                    if let Some(popup) = POPUP_FOR_KEYS.get() {
+                                        if let Ok(popup) = popup.lock() {
+                                            popup.load_items(false);
+                                            popup.refresh_display();
+                                        }
+                                    }
+                                }));
+                            });
+                        }
+                    });
+                }
 
                 // Show window
                 if let Some(window) = self.window.borrow().as_ref() {
@@ -462,6 +496,7 @@ impl PopupWindow {
 
     pub fn hide(&mut self) {
         self.visible = false;
+        self.auto_refresh_active.store(false, Ordering::Relaxed);
         log::info!("Popup window hidden");
 
         if let Some(window) = self.window.borrow().as_ref() {
