@@ -14,3 +14,8 @@ Cargo.lock
 
 # Local testing
 *.log
+output.txt
+
+# Build artifacts
+ClipVault.app/
+*.dmg
