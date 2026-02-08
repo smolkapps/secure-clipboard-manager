@@ -4,9 +4,6 @@ pub mod popup;
 pub mod statusbar;
 pub mod actions;
 pub mod hotkey;
+pub mod launch_at_login;
 
 pub use menubar::MenuBarApp;
-pub use popup::PopupWindow;
-pub use statusbar::StatusBarController;
-pub use actions::MenuActions;
-pub use hotkey::HotkeyManager;

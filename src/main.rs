@@ -222,11 +222,9 @@ fn main() {
     let encryptor_for_ui = Encryptor::new(key_path2)
         .expect("Failed to initialize encryptor for UI");
 
-    let app = MenuBarApp::new(db_for_ui, encryptor_for_ui);
+    let app = MenuBarApp::new(db_for_ui, encryptor_for_ui, data_dir);
 
-    info!("✓ Launching menu bar app...");
-    info!("✓ Starting hotkey event polling...");
-    info!("");
+    info!("Launching menu bar app...");
 
     // Start background thread that polls global hotkey events directly
     // and dispatches toggle to main thread
@@ -267,20 +265,7 @@ fn main() {
                 }
             }
 
-            // Also process keyboard events for the popup window (only if visible)
-            // This allows keyboard navigation to work
-            let popup_clone = Arc::clone(&popup_for_polling);
-            Queue::main().exec_async(move || {
-                // Catch any panics to prevent crashes through Obj-C boundary
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if let Ok(mut popup) = popup_clone.lock() {
-                        // Only process key events if the popup is actually visible
-                        if popup.is_visible() {
-                            popup.process_key_events();
-                        }
-                    }
-                }));
-            });
+            // Key events are handled by KeyHandlingTextView::keyDown: directly
         }
     });
 

@@ -2,9 +2,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 use std::cell::RefCell;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
 use objc2::{declare_class, msg_send_id};
-use objc2::mutability::InteriorMutable;
 use objc2::ClassType;
 use objc2::DeclaredClass;
 use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSFont, NSColor};
@@ -12,7 +10,6 @@ use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMu
 use objc2::msg_send;
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
-use dispatch::Queue;
 
 // Global reference to the popup so ObjC key handler can access it
 pub(crate) static POPUP_FOR_KEYS: OnceLock<Arc<Mutex<PopupWindow>>> = OnceLock::new();
@@ -359,9 +356,7 @@ impl PopupWindow {
         // Sync visible state with actual window visibility
         // (handles case where user closed window via red X button)
         if let Some(window) = self.window.borrow().as_ref() {
-            unsafe {
-                self.visible = window.isVisible();
-            }
+            self.visible = window.isVisible();
         }
 
         self.visible = !self.visible;
@@ -461,12 +456,10 @@ impl PopupWindow {
 
     pub fn hide(&mut self) {
         self.visible = false;
-        log::info!("✖ Popup window hidden");
+        log::info!("Popup window hidden");
 
         if let Some(window) = self.window.borrow().as_ref() {
-            unsafe {
-                window.orderOut(None);
-            }
+            window.orderOut(None);
         }
     }
 
@@ -477,8 +470,10 @@ impl PopupWindow {
     pub fn move_selection_down(&self) {
         let items_len = self.items.borrow().len();
         if items_len > 0 {
-            let mut idx = self.selected_index.borrow_mut();
-            *idx = (*idx + 1) % items_len;
+            {
+                let mut idx = self.selected_index.borrow_mut();
+                *idx = (*idx + 1) % items_len;
+            } // RefMut dropped here — must release before refresh_display() borrows
             self.refresh_display();
         }
     }
@@ -486,8 +481,10 @@ impl PopupWindow {
     pub fn move_selection_up(&self) {
         let items_len = self.items.borrow().len();
         if items_len > 0 {
-            let mut idx = self.selected_index.borrow_mut();
-            *idx = if *idx == 0 { items_len - 1 } else { *idx - 1 };
+            {
+                let mut idx = self.selected_index.borrow_mut();
+                *idx = if *idx == 0 { items_len - 1 } else { *idx - 1 };
+            } // RefMut dropped here
             self.refresh_display();
         }
     }
@@ -546,9 +543,4 @@ impl PopupWindow {
         self.hide();
     }
 
-    /// Process any pending keyboard events (call this periodically from main thread)
-    /// Note: Keyboard events are now handled directly by KeyHandlingTextView's keyDown: override.
-    pub fn process_key_events(&mut self) {
-        // Keyboard events are handled by KeyHandlingTextView's keyDown: override
-    }
 }
