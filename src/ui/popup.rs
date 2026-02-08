@@ -332,6 +332,42 @@ impl PopupWindow {
                 }
             }
 
+            // Preview pane: show full text of selected item
+            if let Some(selected_item) = items.get(selected_idx) {
+                Self::append_styled_line(
+                    &mut result, "\n  ─────────────────────────────────────────\n",
+                    &small_font, &NSColor::separatorColor(), None, &font_key, &fg_key, &bg_key,
+                );
+
+                let type_label = match selected_item.data_type.as_str() {
+                    "image" => "Image",
+                    "url" => "URL",
+                    _ => "Text",
+                };
+                let count_info = if selected_item.copy_count > 1 {
+                    format!(" • copied ×{}", selected_item.copy_count)
+                } else {
+                    String::new()
+                };
+                let header = format!("  {}{}\n\n", type_label, count_info);
+                Self::append_styled_line(
+                    &mut result, &header,
+                    &bold_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
+                );
+
+                let full_text = selected_item.preview_text.as_deref().unwrap_or("[No preview]");
+                // Wrap long text at ~80 chars for readability
+                let wrapped = Self::word_wrap(full_text, 80);
+                let padded = wrapped.lines()
+                    .map(|line| format!("  {}", line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Self::append_styled_line(
+                    &mut result, &format!("{}\n", padded),
+                    &mono_font, &NSColor::labelColor(), None, &font_key, &fg_key, &bg_key,
+                );
+            }
+
             // Replace text storage contents
             if let Some(mut storage) = text_view.textStorage() {
                 let full_range = NSRange::new(0, storage.length());
@@ -366,6 +402,33 @@ impl PopupWindow {
         }
 
         result.appendAttributedString(&line_attr);
+    }
+
+    fn word_wrap(text: &str, width: usize) -> String {
+        let mut result = String::new();
+        for line in text.lines() {
+            if line.chars().count() <= width {
+                result.push_str(line);
+                result.push('\n');
+            } else {
+                let mut col = 0;
+                for word in line.split_whitespace() {
+                    let wlen = word.chars().count();
+                    if col > 0 && col + 1 + wlen > width {
+                        result.push('\n');
+                        col = 0;
+                    }
+                    if col > 0 {
+                        result.push(' ');
+                        col += 1;
+                    }
+                    result.push_str(word);
+                    col += wlen;
+                }
+                result.push('\n');
+            }
+        }
+        result
     }
 
     pub fn toggle(&mut self) {
