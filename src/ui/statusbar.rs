@@ -9,14 +9,17 @@ use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAlertFirstButtonReturn,
 };
 use objc2_foundation::{NSString, NSObject, MainThreadMarker};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use crate::storage::{Database, Encryptor};
+use crate::storage::{AppConfig, Database, Encryptor};
 use crate::ui::popup::PopupWindow;
+use crate::ui::launch_at_login;
 
 // Global references accessible from ObjC action methods
 static SHARED_POPUP: OnceLock<Arc<Mutex<PopupWindow>>> = OnceLock::new();
 static SHARED_DB: OnceLock<Arc<Mutex<Database>>> = OnceLock::new();
 static SHARED_ENCRYPTOR: OnceLock<Arc<Mutex<Encryptor>>> = OnceLock::new();
+static SHARED_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 declare_class!(
     struct MenuTarget;
@@ -35,7 +38,6 @@ declare_class!(
         #[method(showHistory:)]
         fn show_history(&self, _sender: &AnyObject) {
             log::info!("Show/Hide History menu item clicked");
-            // catch_unwind prevents panics from unwinding across ObjC boundary
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if let Some(popup) = SHARED_POPUP.get() {
                     if let Ok(mut popup) = popup.lock() {
@@ -62,21 +64,16 @@ declare_class!(
                                         if let Some(enc_arc) = SHARED_ENCRYPTOR.get() {
                                             if let Ok(enc) = enc_arc.lock() {
                                                 match enc.decrypt(&blob) {
-                                                    Ok(decrypted) => {
-                                                        log::info!("   Decrypted encrypted item successfully");
-                                                        decrypted
-                                                    }
+                                                    Ok(decrypted) => decrypted,
                                                     Err(e) => {
-                                                        log::error!("   Failed to decrypt item: {}", e);
+                                                        log::error!("Failed to decrypt item: {}", e);
                                                         return;
                                                     }
                                                 }
                                             } else {
-                                                log::error!("   Failed to lock encryptor");
                                                 return;
                                             }
                                         } else {
-                                            log::error!("   Encryptor not available, cannot decrypt item");
                                             return;
                                         }
                                     } else {
@@ -87,7 +84,7 @@ declare_class!(
                                     let text = String::from_utf8_lossy(&data);
                                     let ns_str = NSString::from_str(&text);
                                     pb.setString_forType(&ns_str, NSPasteboardTypeString);
-                                    log::info!("   Pasted to clipboard");
+                                    log::info!("Pasted item {} to clipboard", item_id);
                                 }
                             }
                         }
@@ -99,8 +96,6 @@ declare_class!(
         #[method(clearHistory:)]
         fn clear_history(&self, _sender: &AnyObject) {
             log::info!("Clear History clicked");
-            // Defer alert to after menu closes — runModal() conflicts with
-            // the status bar menu's own modal tracking loop, causing a freeze.
             dispatch::Queue::main().exec_async(move || {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     unsafe {
@@ -119,35 +114,51 @@ declare_class!(
 
                         let response = alert.runModal();
                         if response == NSAlertFirstButtonReturn {
-                            log::info!("   User confirmed clear");
+                            log::info!("User confirmed clear");
                             if let Some(db_arc) = SHARED_DB.get() {
                                 if let Ok(db) = db_arc.lock() {
                                     match db.soft_delete_all_items() {
-                                        Ok(count) => log::info!("   Soft-deleted {} items", count),
-                                        Err(e) => log::error!("   Failed to clear: {}", e),
+                                        Ok(count) => log::info!("Soft-deleted {} items", count),
+                                        Err(e) => log::error!("Failed to clear: {}", e),
                                     }
                                 }
                             }
-                        } else {
-                            log::info!("   User cancelled clear");
                         }
                     }
                 }));
             });
         }
 
-        /// Called by macOS each time the menu is about to be displayed.
-        /// This is the NSMenuDelegate method that triggers a dynamic rebuild.
+        #[method(toggleLaunchAtLogin:)]
+        fn toggle_launch_at_login(&self, _sender: &AnyObject) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Some(data_dir) = SHARED_DATA_DIR.get() {
+                    let mut config = AppConfig::load(data_dir);
+                    config.launch_at_login = !config.launch_at_login;
+
+                    if let Err(e) = launch_at_login::sync(config.launch_at_login) {
+                        log::error!("Failed to toggle launch at login: {}", e);
+                        return;
+                    }
+
+                    if let Err(e) = config.save(data_dir) {
+                        log::error!("Failed to save config: {}", e);
+                        return;
+                    }
+
+                    log::info!("Launch at Login: {}", if config.launch_at_login { "enabled" } else { "disabled" });
+                }
+            }));
+        }
+
         #[method(menuNeedsUpdate:)]
         fn menu_needs_update(&self, menu: &NSMenu) {
-            log::info!("Menu about to open, rebuilding items dynamically");
             unsafe {
                 menu.removeAllItems();
 
                 let mtm = MainThreadMarker::new()
                     .expect("menuNeedsUpdate: must be called on main thread");
 
-                // self IS the MenuTarget, use it directly as the action target
                 StatusBarController::populate_menu(menu, self, mtm);
             }
         }
@@ -168,12 +179,17 @@ pub struct StatusBarController {
 }
 
 impl StatusBarController {
-    pub fn new(db: Arc<Mutex<Database>>, popup: Arc<Mutex<PopupWindow>>, encryptor: Arc<Mutex<Encryptor>>) -> Self {
+    pub fn new(
+        db: Arc<Mutex<Database>>,
+        popup: Arc<Mutex<PopupWindow>>,
+        encryptor: Arc<Mutex<Encryptor>>,
+        data_dir: PathBuf,
+    ) -> Self {
         let _ = SHARED_DB.set(Arc::clone(&db));
-        // Also set the popup reference for keyboard event handling in popup.rs
         let _ = crate::ui::popup::POPUP_FOR_KEYS.set(Arc::clone(&popup));
         let _ = SHARED_POPUP.set(popup);
         let _ = SHARED_ENCRYPTOR.set(encryptor);
+        let _ = SHARED_DATA_DIR.set(data_dir);
 
         unsafe {
             let mtm = MainThreadMarker::new().expect("Must be on main thread");
@@ -189,30 +205,25 @@ impl StatusBarController {
             let menu = NSMenu::new(mtm);
             menu.setAutoenablesItems(false);
 
-            // Set MenuTarget as the menu's delegate so menuNeedsUpdate: fires
-            // each time the menu is opened. We use msg_send! to call setDelegate:
-            // with our MenuTarget which implements the method informally.
             let delegate_ptr: *const MenuTarget = &*menu_target;
             let _: () = msg_send![&menu, setDelegate: delegate_ptr];
 
-            // Initial population so the menu isn't empty before first open
             Self::populate_menu(&menu, &menu_target, mtm);
 
             status_item.setMenu(Some(&menu));
-            log::info!("Status bar icon created with dynamic menu");
+            log::info!("Status bar icon created");
 
             StatusBarController { status_item, menu_target }
         }
     }
 
     /// Populate (or repopulate) the given menu with all standard items.
-    /// Called both during initialization and from `menuNeedsUpdate:`.
     unsafe fn populate_menu(
         menu: &NSMenu,
         target: &MenuTarget,
         mtm: MainThreadMarker,
     ) {
-        // Toggle history window - label reflects current state
+        // Toggle history window
         let history_label = if let Some(popup_arc) = SHARED_POPUP.get() {
             if let Ok(popup) = popup_arc.lock() {
                 if popup.is_visible() { "Hide History Window" } else { "Show All History" }
@@ -225,7 +236,7 @@ impl StatusBarController {
         Self::add_action_item(menu, history_label, Some("h"), sel!(showHistory:), target, mtm);
         Self::add_separator(menu, mtm);
 
-        // Recent clipboard items - wired to pasteItem: action
+        // Recent clipboard items
         if let Some(db_arc) = SHARED_DB.get() {
             if let Ok(db) = db_arc.lock() {
                 match db.get_recent_items(10) {
@@ -271,6 +282,24 @@ impl StatusBarController {
 
         Self::add_separator(menu, mtm);
         Self::add_action_item(menu, "Clear History", None, sel!(clearHistory:), target, mtm);
+        Self::add_separator(menu, mtm);
+
+        // Launch at Login toggle (with checkmark for current state)
+        let launch_enabled = SHARED_DATA_DIR.get()
+            .map(|dir| AppConfig::load(dir).launch_at_login)
+            .unwrap_or(false);
+
+        let login_title = NSString::from_str("Launch at Login");
+        let login_key = NSString::from_str("");
+        let login_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(), &login_title, Some(sel!(toggleLaunchAtLogin:)), &login_key,
+        );
+        login_item.setEnabled(true);
+        login_item.setTarget(Some(target));
+        if launch_enabled {
+            let _: () = msg_send![&login_item, setState: 1_isize]; // NSOnState = 1
+        }
+        menu.addItem(&login_item);
         Self::add_separator(menu, mtm);
 
         // Quit
