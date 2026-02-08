@@ -164,6 +164,14 @@ fn main() {
 
                     // Store to database
                     if let Ok(db) = db_clone.lock() {
+                        // Remove existing duplicates before inserting the new entry
+                        if let Err(e) = db.remove_duplicates(
+                            processed.preview_text.as_deref(),
+                            processed.data_type.as_str(),
+                        ) {
+                            error!("   ✗ Failed to remove duplicates: {}", e);
+                        }
+
                         match db.store_blob(&blob_data) {
                             Ok(blob_id) => {
                                 let timestamp = chrono::Utc::now().timestamp();
