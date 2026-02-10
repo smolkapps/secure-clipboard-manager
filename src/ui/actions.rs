@@ -2,7 +2,7 @@
 use crate::storage::Database;
 use std::sync::{Arc, Mutex};
 use objc2_app_kit::NSPasteboard;
-use objc2_foundation::NSString;
+use objc2_foundation::{NSString, NSData};
 
 pub struct MenuActions {
     db: Arc<Mutex<Database>>,
@@ -72,12 +72,21 @@ impl MenuActions {
                                 unsafe {
                                     let pasteboard = NSPasteboard::generalPasteboard();
                                     pasteboard.clearContents();
-                                    
-                                    let text = String::from_utf8_lossy(&data);
-                                    let ns_string = NSString::from_str(&text);
-                                    pasteboard.setString_forType(&ns_string, objc2_app_kit::NSPasteboardTypeString);
-                                    
-                                    log::info!("   ✓ Pasted to clipboard");
+
+                                    match item.data_type.as_str() {
+                                        "image" => {
+                                            let ns_data = NSData::with_bytes(&data);
+                                            let type_str = NSString::from_str("public.png");
+                                            pasteboard.setData_forType(Some(&ns_data), &type_str);
+                                            log::info!("   ✓ Pasted image to clipboard");
+                                        }
+                                        _ => {
+                                            let text = String::from_utf8_lossy(&data);
+                                            let ns_string = NSString::from_str(&text);
+                                            pasteboard.setString_forType(&ns_string, objc2_app_kit::NSPasteboardTypeString);
+                                            log::info!("   ✓ Pasted text to clipboard");
+                                        }
+                                    }
                                 }
                             }
                             Err(e) => log::error!("   ✗ Failed to get blob: {}", e),
