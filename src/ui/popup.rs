@@ -7,7 +7,7 @@ use objc2::{declare_class, msg_send_id};
 use objc2::ClassType;
 use objc2::DeclaredClass;
 use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSFont, NSColor};
-use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMutableAttributedString, NSRange};
+use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMutableAttributedString, NSRange, NSData};
 use objc2::msg_send;
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
@@ -628,8 +628,10 @@ impl PopupWindow {
 
                         match item.data_type.as_str() {
                             "image" => {
-                                // TODO: Set image data
-                                log::info!("✓ Image paste not yet implemented");
+                                let ns_data = NSData::with_bytes(&data);
+                                let type_str = NSString::from_str("public.png");
+                                pb.setData_forType(Some(&ns_data), &type_str);
+                                log::info!("✓ Pasted image to clipboard");
                             }
                             _ => {
                                 let text = String::from_utf8_lossy(&data);
