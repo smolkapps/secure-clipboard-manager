@@ -141,9 +141,28 @@ impl DataProcessor {
     /// Check if text is a URL
     fn is_url(text: &str) -> bool {
         let trimmed = text.trim();
-        trimmed.starts_with("http://") ||
-        trimmed.starts_with("https://") ||
-        trimmed.starts_with("ftp://")
+
+        // Check for explicit protocols
+        if trimmed.starts_with("http://") ||
+           trimmed.starts_with("https://") ||
+           trimmed.starts_with("ftp://") {
+            return true;
+        }
+
+        // Check for domain-like patterns (e.g., "github.com", "www.example.com")
+        // Must contain a dot, not contain spaces, and look like a domain
+        if !trimmed.contains(' ') && trimmed.contains('.') {
+            // Common TLDs and domain patterns
+            let lower = trimmed.to_lowercase();
+            if lower.ends_with(".com") || lower.ends_with(".org") || lower.ends_with(".net") ||
+               lower.ends_with(".edu") || lower.ends_with(".gov") || lower.ends_with(".io") ||
+               lower.ends_with(".co") || lower.ends_with(".ai") || lower.ends_with(".dev") ||
+               lower.starts_with("www.") {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Generate preview text (first 200 chars)

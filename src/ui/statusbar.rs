@@ -247,6 +247,11 @@ impl StatusBarController {
                         for (i, item) in items.iter().enumerate() {
                             let title = match &item.preview_text {
                                 Some(preview) => {
+                                    let icon = match item.data_type.as_str() {
+                                        "image" => "🖼️ ",
+                                        "url" => "🔗 ",
+                                        _ => "📝 ",
+                                    };
                                     let short = if preview.chars().count() > 50 {
                                         format!("{}...", preview.chars().take(50).collect::<String>())
                                     } else {
@@ -258,9 +263,16 @@ impl StatusBarController {
                                     } else {
                                         String::new()
                                     };
-                                    format!("{}{}{}", short, count, lock)
+                                    format!("{}{}{}{}", icon, short, count, lock)
                                 }
-                                None => format!("{} item", item.data_type),
+                                None => {
+                                    let icon = match item.data_type.as_str() {
+                                        "image" => "🖼️ ",
+                                        "url" => "🔗 ",
+                                        _ => "📝 ",
+                                    };
+                                    format!("{}{} item", icon, item.data_type)
+                                }
                             };
 
                             let title_ns = NSString::from_str(&title);
