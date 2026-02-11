@@ -57,6 +57,12 @@ fn main() {
         }
         None => {
             error!("Another ClipVault instance is already running for this user. Exiting.");
+            let _ = std::process::Command::new("osascript")
+                .args([
+                    "-e",
+                    "display dialog \"ClipVault is already running.\\n\\nLook for the 📋 icon in your menu bar.\" buttons {\"OK\"} default button \"OK\" with title \"ClipVault\" with icon caution",
+                ])
+                .status();
             std::process::exit(0);
         }
     };
