@@ -10,9 +10,26 @@ use clipboard::ClipboardMonitor;
 use storage::{Database, DataProcessor, Encryptor};
 use ui::MenuBarApp;
 use log::{error, info};
-use std::path::PathBuf;
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
+/// Acquire an exclusive file lock. Returns the File handle which must be kept
+/// alive for the duration of the process — the lock is released automatically
+/// when the handle is dropped (including on crash/kill).
+fn acquire_instance_lock(data_dir: &Path) -> Option<File> {
+    let lock_path = data_dir.join("instance.lock");
+    let file = File::create(&lock_path).ok()?;
+    let fd = file.as_raw_fd();
+    let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if result == 0 {
+        Some(file)
+    } else {
+        None
+    }
+}
 
 fn main() {
     // Initialize logger
@@ -23,37 +40,26 @@ fn main() {
     info!("🚀 Clipboard Manager - Phase 4: Menu Bar UI");
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    // Check for existing instance using lock file
-    let lock_path = std::env::temp_dir().join("clipboard-manager.lock");
-    if lock_path.exists() {
-        // Try to read PID and check if process is still running
-        if let Ok(pid_str) = std::fs::read_to_string(&lock_path) {
-            if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                // Check if process exists
-                unsafe {
-                    let result = libc::kill(pid, 0);
-                    if result == 0 {
-                        info!("⚠️  Another instance is already running (PID: {}). Exiting...", pid);
-                        std::process::exit(0);
-                    }
-                }
-            }
-        }
-    }
-
-    // Write our PID to lock file
-    let current_pid = std::process::id();
-    std::fs::write(&lock_path, current_pid.to_string())
-        .expect("Failed to write lock file");
-
-    info!("✓ Single-instance check passed (PID: {})", current_pid);
-
     // Initialize data directory
     let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("clipboard-manager");
 
     std::fs::create_dir_all(&data_dir).expect("Failed to create data directory");
+
+    // Single-instance check: acquire exclusive flock on data_dir/instance.lock.
+    // The lock is per-user (each user has their own ~/Library/Application Support/)
+    // so multiple users can each run their own instance without conflict.
+    let _instance_lock = match acquire_instance_lock(&data_dir) {
+        Some(lock) => {
+            info!("✓ Single-instance lock acquired (PID: {})", std::process::id());
+            lock
+        }
+        None => {
+            error!("Another ClipVault instance is already running for this user. Exiting.");
+            std::process::exit(0);
+        }
+    };
 
     // Initialize database
     let db_path = data_dir.join("clipboard.db");
