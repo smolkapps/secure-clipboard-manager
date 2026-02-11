@@ -22,11 +22,11 @@ impl Database {
 
     /// Initialize database schema
     fn initialize_schema(&mut self) -> Result<()> {
-        // Enable WAL mode for concurrent reads/writes
-        self.conn.execute("PRAGMA journal_mode=WAL", [])?;
+        // Enable WAL mode for concurrent reads/writes (returns a row, so use query_row)
+        let _: String = self.conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
 
         // Set busy timeout to 5 seconds (retry on SQLITE_BUSY instead of failing immediately)
-        self.conn.execute("PRAGMA busy_timeout=5000", [])?;
+        let _: i64 = self.conn.query_row("PRAGMA busy_timeout=5000", [], |row| row.get(0))?;
 
         // Enable foreign keys
         self.conn.execute("PRAGMA foreign_keys = ON", [])?;
