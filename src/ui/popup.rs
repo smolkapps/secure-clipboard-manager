@@ -7,8 +7,9 @@ use objc2::{declare_class, msg_send_id};
 use objc2::ClassType;
 use objc2::DeclaredClass;
 use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSTextView, NSScrollView, NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen, NSFont, NSColor};
-use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMutableAttributedString, NSRange, NSData};
+use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMutableAttributedString, NSRange, NSData, NSObject};
 use objc2::msg_send;
+use objc2::runtime::AnyObject;
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use objc2_app_kit::NSPasteboard;
 
@@ -121,9 +122,44 @@ declare_class!(
     }
 );
 
+// Window delegate to handle red X close button
+declare_class!(
+    struct WindowDelegate;
+
+    unsafe impl ClassType for WindowDelegate {
+        type Super = NSObject;
+        type Mutability = objc2::mutability::InteriorMutable;
+        const NAME: &'static str = "ClipVaultWindowDelegate";
+    }
+
+    impl DeclaredClass for WindowDelegate {
+        type Ivars = ();
+    }
+
+    unsafe impl WindowDelegate {
+        #[method(windowWillClose:)]
+        fn window_will_close(&self, _notification: &AnyObject) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                log::info!("Window delegate: red X button clicked, calling hide()");
+                if let Some(popup) = POPUP_FOR_KEYS.get() {
+                    if let Ok(mut popup) = popup.lock() {
+                        popup.hide();
+                    }
+                }
+            }));
+        }
+    }
+);
+
 impl KeyHandlingTextView {
     fn new_with_frame(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         unsafe { msg_send_id![mtm.alloc::<Self>(), initWithFrame: frame] }
+    }
+}
+
+impl WindowDelegate {
+    fn new(_mtm: MainThreadMarker) -> Retained<Self> {
+        unsafe { msg_send_id![Self::alloc(), init] }
     }
 }
 
@@ -132,6 +168,7 @@ pub struct PopupWindow {
     encryptor: Arc<Mutex<Encryptor>>,
     window: RefCell<Option<Retained<NSWindow>>>,
     text_view: RefCell<Option<Retained<NSTextView>>>,
+    window_delegate: RefCell<Option<Retained<WindowDelegate>>>,
     items: RefCell<Vec<ClipboardItem>>,
     selected_index: RefCell<usize>,
     visible: bool,
@@ -152,6 +189,7 @@ impl PopupWindow {
             encryptor,
             window: RefCell::new(None),
             text_view: RefCell::new(None),
+            window_delegate: RefCell::new(None),
             items: RefCell::new(Vec::new()),
             selected_index: RefCell::new(0),
             visible: false,
@@ -228,13 +266,28 @@ impl PopupWindow {
         let text_view_as_super: Retained<NSTextView> = Retained::into_super(text_view);
         *self.text_view.borrow_mut() = Some(text_view_as_super);
 
-        log::info!("✓ Window created with keyboard navigation support");
+        // Create and set window delegate to handle red X close button
+        let delegate = WindowDelegate::new(mtm);
+        let delegate_ptr: *const WindowDelegate = &*delegate;
+        let _: () = msg_send![&window, setDelegate: delegate_ptr];
+        *self.window_delegate.borrow_mut() = Some(delegate);
+
+        log::info!("✓ Window created with keyboard navigation support and close delegate");
 
         window
     }
 
     fn load_items(&self, reset_selection: bool) {
-        if let Ok(db) = self.db.lock() {
+        // Handle poisoned mutex gracefully
+        let db_result = self.db.lock();
+        let db_guard = match db_result {
+            Ok(guard) => Some(guard),
+            Err(poisoned) => {
+                log::error!("Database mutex poisoned in load_items, recovering...");
+                Some(poisoned.into_inner())
+            }
+        };
+        if let Some(db) = db_guard {
             match db.get_recent_items(20) {
                 Ok(items) => {
                     if reset_selection {
@@ -605,11 +658,28 @@ impl PopupWindow {
         if let Some(item) = item_to_paste {
             log::info!("📋 Pasting item #{}", item.id);
 
-            if let Ok(db) = self.db.lock() {
+            // Handle poisoned mutex gracefully
+            let db_result = self.db.lock();
+            let db_guard = match db_result {
+                Ok(guard) => Some(guard),
+                Err(poisoned) => {
+                    log::error!("Database mutex poisoned in paste_and_close, recovering...");
+                    Some(poisoned.into_inner())
+                }
+            };
+            if let Some(db) = db_guard {
                 if let Ok(blob) = db.get_blob(item.data_blob_id) {
-                    // Decrypt if needed
+                    // Decrypt if needed (handle poisoned encryptor mutex gracefully)
                     let data = if item.is_encrypted {
-                        if let Ok(enc) = self.encryptor.lock() {
+                        let enc_result = self.encryptor.lock();
+                        let enc_guard = match enc_result {
+                            Ok(guard) => Some(guard),
+                            Err(poisoned) => {
+                                log::error!("Encryptor mutex poisoned in paste_and_close, recovering...");
+                                Some(poisoned.into_inner())
+                            }
+                        };
+                        if let Some(enc) = enc_guard {
                             enc.decrypt(&blob).unwrap_or_else(|e| {
                                 log::error!("Decryption failed: {}", e);
                                 blob.clone()

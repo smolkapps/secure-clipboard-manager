@@ -73,10 +73,10 @@ impl ClipboardMonitor {
 
                 info!("Clipboard change detected: {:?}", types);
 
-                // Send change notification
+                // Send change notification (non-fatal: log error but continue monitoring)
                 if let Err(e) = tx.send(change) {
-                    log::error!("Failed to send clipboard change: {}", e);
-                    break;
+                    log::error!("Failed to send clipboard change (channel error, continuing): {}", e);
+                    // DO NOT break - keep monitoring even if channel fails temporarily
                 }
 
                 self.last_change_count = current_count;
