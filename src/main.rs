@@ -153,9 +153,17 @@ fn main() {
 
                 // Store processed data
                 if let Some(processed) = processed_opt {
-                    // Encrypt if sensitive
+                    // Encrypt if sensitive (handle poisoned mutex gracefully)
                     let (blob_data, is_encrypted) = if processed.is_sensitive {
-                        if let Ok(enc) = encryptor_clone.lock() {
+                        let enc_result = encryptor_clone.lock();
+                        let enc_guard = match enc_result {
+                            Ok(guard) => Some(guard),
+                            Err(poisoned) => {
+                                error!("   ✗ Encryptor mutex poisoned, recovering...");
+                                Some(poisoned.into_inner())
+                            }
+                        };
+                        if let Some(enc) = enc_guard {
                             match enc.encrypt(&processed.blob) {
                                 Ok(encrypted) => {
                                     info!("   🔐 Encrypted sensitive data ({} → {} bytes)",
@@ -174,8 +182,16 @@ fn main() {
                         (processed.blob.clone(), false)
                     };
 
-                    // Store to database
-                    if let Ok(db) = db_clone.lock() {
+                    // Store to database (handle poisoned mutex gracefully)
+                    let db_result = db_clone.lock();
+                    let db = match db_result {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            error!("   ✗ Database mutex poisoned, recovering...");
+                            poisoned.into_inner()
+                        }
+                    };
+                    {
                         // Remove existing duplicates before inserting the new entry
                         let prev_copy_count = match db.remove_duplicates(
                             processed.preview_text.as_deref(),
@@ -220,9 +236,17 @@ fn main() {
 
                 info!("");
 
-                // Show stats every 10 items
+                // Show stats every 10 items (handle poisoned mutex gracefully)
                 if item_count % 10 == 0 {
-                    if let Ok(db) = db_clone.lock() {
+                    let db_result = db_clone.lock();
+                    let db_guard = match db_result {
+                        Ok(guard) => Some(guard),
+                        Err(poisoned) => {
+                            error!("   ✗ Database mutex poisoned in stats, recovering...");
+                            Some(poisoned.into_inner())
+                        }
+                    };
+                    if let Some(db) = db_guard {
                         if let Ok(count) = db.count_items() {
                             if let Ok(size) = db.get_db_size() {
                                 info!("📊 Stats: {} items stored, {} KB database size", count, size / 1024);
