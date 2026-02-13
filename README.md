@@ -1,6 +1,10 @@
 # 🔐 ClipVault - Secure Clipboard Manager for macOS
 
-Privacy-focused clipboard manager for macOS with automatic encryption. Built in Rust for maximum performance and security.
+[![Get ClipVault Pro - $12.99](https://img.shields.io/badge/Get_Pro-$12.99-blue?style=for-the-badge)](https://smolkapps.lemonsqueezy.com/checkout/buy/76a9fa07-c442-4f26-a9d6-3642f7486dbc)
+[![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black?style=for-the-badge&logo=apple)](https://github.com/smolkapps/secure-clipboard-manager)
+[![Built with Rust](https://img.shields.io/badge/Rust-native-orange?style=for-the-badge&logo=rust)](https://github.com/smolkapps/secure-clipboard-manager)
+
+The only encrypted clipboard manager that works on macOS 12 Monterey and later. Built in Rust — no Electron, no bloat. Auto-detects and encrypts passwords, API keys, and tokens with AES-256-GCM.
 
 ## ✨ Features
 
@@ -229,7 +233,7 @@ cargo clippy
 
 ## 📄 License
 
-TBD - Commercial one-time purchase planned
+ClipVault Core is free to use. ClipVault Pro ($12.99 one-time) unlocks unlimited history, AES-256-GCM encryption, and sensitive data auto-detection. [Get Pro](https://smolkapps.lemonsqueezy.com/checkout/buy/76a9fa07-c442-4f26-a9d6-3642f7486dbc)
 
 ## 🙏 Acknowledgments
 
@@ -242,4 +246,4 @@ Inspired by:
 
 **Built with ❤️ in Rust for macOS**
 
-⚠️ **Development Status**: Currently in active development. Basic functionality working, UI features in progress.
+*Created because Raycast doesn't work on macOS 12 — and turned out better than Raycast's clipboard anyway.*
