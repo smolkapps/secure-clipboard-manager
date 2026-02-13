@@ -403,6 +403,47 @@ impl Database {
         Ok((count, max_copy_count))
     }
 
+    /// Delete oldest items beyond the given limit (for free tier enforcement).
+    pub fn enforce_history_limit(&self, max_items: usize) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        let to_delete: Vec<(i64, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, data_blob_id FROM clipboard_items
+                 ORDER BY timestamp DESC
+                 LIMIT -1 OFFSET ?1"
+            )?;
+            let result = stmt.query_map(params![max_items as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?.collect::<Result<Vec<_>>>()?;
+            result
+        };
+
+        if to_delete.is_empty() {
+            tx.commit()?;
+            return Ok(0);
+        }
+
+        for (item_id, blob_id) in &to_delete {
+            tx.execute(
+                "DELETE FROM clipboard_items WHERE id = ?1",
+                params![item_id],
+            )?;
+            tx.execute(
+                "DELETE FROM clipboard_data WHERE id = ?1",
+                params![blob_id],
+            )?;
+        }
+
+        let count = to_delete.len();
+        tx.commit()?;
+
+        if count > 0 {
+            info!("📦 Trimmed {} items (free tier limit: {})", count, max_items);
+        }
+        Ok(count)
+    }
+
     /// Get total item count
     pub fn count_items(&self) -> Result<i64> {
         let count: i64 = self.conn.query_row(

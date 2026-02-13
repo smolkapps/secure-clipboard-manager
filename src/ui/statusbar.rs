@@ -12,14 +12,18 @@ use objc2_foundation::{NSString, NSObject, MainThreadMarker};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use crate::storage::{AppConfig, Database, Encryptor};
+use crate::storage::license::{LicenseManager, CHECKOUT_URL};
 use crate::ui::popup::PopupWindow;
 use crate::ui::launch_at_login;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Global references accessible from ObjC action methods
 static SHARED_POPUP: OnceLock<Arc<Mutex<PopupWindow>>> = OnceLock::new();
 static SHARED_DB: OnceLock<Arc<Mutex<Database>>> = OnceLock::new();
 static SHARED_ENCRYPTOR: OnceLock<Arc<Mutex<Encryptor>>> = OnceLock::new();
 static SHARED_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+static SHARED_PRO_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static ACTIVATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 declare_class!(
     struct MenuTarget;
@@ -151,6 +155,103 @@ declare_class!(
             }));
         }
 
+        #[method(enterLicense:)]
+        fn enter_license(&self, _sender: &AnyObject) {
+            log::info!("Enter License Key clicked");
+            std::thread::spawn(|| {
+                // Prevent concurrent activation attempts
+                let lock = ACTIVATION_LOCK.get_or_init(|| Mutex::new(()));
+                let _guard = match lock.try_lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        log::warn!("Activation already in progress");
+                        return;
+                    }
+                };
+
+                let output = std::process::Command::new("osascript")
+                    .args(["-e",
+                        "display dialog \"Enter your ClipVault Pro license key:\" default answer \"\" with title \"Activate ClipVault Pro\" buttons {\"Cancel\", \"Activate\"} default button \"Activate\""
+                    ])
+                    .output();
+
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        let result = String::from_utf8_lossy(&out.stdout);
+                        if let Some(key) = result.split("text returned:").nth(1) {
+                            let key = key.trim();
+                            if !key.is_empty() {
+                                if let (Some(pro_flag), Some(data_dir)) =
+                                    (SHARED_PRO_FLAG.get(), SHARED_DATA_DIR.get())
+                                {
+                                    let mgr = LicenseManager::new(data_dir, Arc::clone(pro_flag));
+                                    match mgr.activate(key) {
+                                        Ok(_info) => {
+                                            let _ = std::process::Command::new("osascript")
+                                                .args(["-e",
+                                                    "display dialog \"ClipVault Pro activated!\\n\\nThank you for your purchase.\" buttons {\"OK\"} default button \"OK\" with title \"ClipVault Pro\""
+                                                ])
+                                                .status();
+                                        }
+                                        Err(e) => {
+                                            let msg: String = e.chars()
+                                                .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '.' | ',' | '-' | '_' | ':'))
+                                                .take(200)
+                                                .collect();
+                                            let script = format!(
+                                                "display dialog \"Activation failed:\\n\\n{}\" buttons {{\"OK\"}} default button \"OK\" with title \"ClipVault\" with icon stop",
+                                                msg
+                                            );
+                                            let _ = std::process::Command::new("osascript")
+                                                .args(["-e", &script])
+                                                .status();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        #[method(getPro:)]
+        fn get_pro(&self, _sender: &AnyObject) {
+            log::info!("Get ClipVault Pro clicked");
+            let _ = std::process::Command::new("open")
+                .arg(CHECKOUT_URL)
+                .status();
+        }
+
+        #[method(deactivateLicense:)]
+        fn deactivate_license(&self, _sender: &AnyObject) {
+            log::info!("Deactivate License clicked");
+            std::thread::spawn(|| {
+                let output = std::process::Command::new("osascript")
+                    .args(["-e",
+                        "display dialog \"Are you sure you want to deactivate your license?\\n\\nYou can reactivate on this or another machine.\" buttons {\"Cancel\", \"Deactivate\"} default button \"Cancel\" with title \"ClipVault Pro\""
+                    ])
+                    .output();
+
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        let result = String::from_utf8_lossy(&out.stdout);
+                        if result.contains("Deactivate") {
+                            if let (Some(pro_flag), Some(data_dir)) =
+                                (SHARED_PRO_FLAG.get(), SHARED_DATA_DIR.get())
+                            {
+                                let mgr = LicenseManager::new(data_dir, Arc::clone(pro_flag));
+                                match mgr.deactivate() {
+                                    Ok(()) => log::info!("License deactivated successfully"),
+                                    Err(e) => log::error!("Deactivation failed: {}", e),
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         #[method(menuNeedsUpdate:)]
         fn menu_needs_update(&self, menu: &NSMenu) {
             unsafe {
@@ -184,12 +285,14 @@ impl StatusBarController {
         popup: Arc<Mutex<PopupWindow>>,
         encryptor: Arc<Mutex<Encryptor>>,
         data_dir: PathBuf,
+        pro_flag: Arc<AtomicBool>,
     ) -> Self {
         let _ = SHARED_DB.set(Arc::clone(&db));
         let _ = crate::ui::popup::POPUP_FOR_KEYS.set(Arc::clone(&popup));
         let _ = SHARED_POPUP.set(popup);
         let _ = SHARED_ENCRYPTOR.set(encryptor);
         let _ = SHARED_DATA_DIR.set(data_dir);
+        let _ = SHARED_PRO_FLAG.set(pro_flag);
 
         unsafe {
             let mtm = MainThreadMarker::new().expect("Must be on main thread");
@@ -317,6 +420,21 @@ impl StatusBarController {
             let _: () = msg_send![&login_item, setState: 1_isize]; // NSOnState = 1
         }
         menu.addItem(&login_item);
+        Self::add_separator(menu, mtm);
+
+        // License status
+        let is_pro = SHARED_PRO_FLAG.get()
+            .map(|f| f.load(Ordering::Relaxed))
+            .unwrap_or(false);
+
+        if is_pro {
+            Self::add_disabled_item(menu, "ClipVault Pro ✓", mtm);
+            Self::add_action_item(menu, "Deactivate License", None, sel!(deactivateLicense:), target, mtm);
+        } else {
+            Self::add_disabled_item(menu, "ClipVault Free", mtm);
+            Self::add_action_item(menu, "Enter License Key...", None, sel!(enterLicense:), target, mtm);
+            Self::add_action_item(menu, "Get ClipVault Pro — $12.99", None, sel!(getPro:), target, mtm);
+        }
         Self::add_separator(menu, mtm);
 
         // Quit
