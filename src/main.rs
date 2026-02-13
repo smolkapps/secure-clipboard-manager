@@ -7,13 +7,15 @@ mod ui;
 
 use cacao::appkit::App;
 use clipboard::ClipboardMonitor;
-use storage::{Database, DataProcessor, Encryptor};
+use storage::{Database, DataProcessor, Encryptor, LicenseManager};
+use storage::license::FREE_HISTORY_LIMIT;
 use ui::MenuBarApp;
 use log::{error, info};
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 /// Acquire an exclusive file lock. Returns the File handle which must be kept
@@ -96,6 +98,16 @@ fn main() {
         _ => {}
     }
 
+    // Check license status
+    let pro_flag = Arc::new(AtomicBool::new(false));
+    let license_mgr = LicenseManager::new(&data_dir, Arc::clone(&pro_flag));
+    let is_pro_on_startup = license_mgr.check_on_startup();
+    if is_pro_on_startup {
+        info!("✓ ClipVault Pro license active");
+    } else {
+        info!("  ClipVault Free (25 item limit, no encryption)");
+    }
+
     info!("");
     info!("✓ Starting clipboard monitor in background...");
 
@@ -106,6 +118,7 @@ fn main() {
     // Clone for background thread
     let db_clone = Arc::clone(&db_shared);
     let encryptor_clone = Arc::clone(&encryptor_shared);
+    let pro_flag_monitor = Arc::clone(&pro_flag);
 
     // Spawn background thread for clipboard monitoring
     std::thread::spawn(move || {
@@ -152,7 +165,14 @@ fn main() {
                 };
 
                 // Store processed data
-                if let Some(processed) = processed_opt {
+                if let Some(mut processed) = processed_opt {
+                    let is_pro = pro_flag_monitor.load(Ordering::Relaxed);
+
+                    // In free tier, disable sensitive detection (Pro feature)
+                    if !is_pro {
+                        processed.is_sensitive = false;
+                    }
+
                     // Encrypt if sensitive (handle poisoned mutex gracefully)
                     let (blob_data, is_encrypted) = if processed.is_sensitive {
                         let enc_result = encryptor_clone.lock();
@@ -231,6 +251,13 @@ fn main() {
                             }
                             Err(e) => error!("   ✗ Failed to store blob: {}", e),
                         }
+
+                        // Enforce history limit for free tier
+                        if !is_pro {
+                            if let Err(e) = db.enforce_history_limit(FREE_HISTORY_LIMIT) {
+                                error!("   ✗ Failed to enforce history limit: {}", e);
+                            }
+                        }
                     }
                 }
 
@@ -271,7 +298,7 @@ fn main() {
     let encryptor_for_ui = Encryptor::new(key_path2)
         .expect("Failed to initialize encryptor for UI");
 
-    let app = MenuBarApp::new(db_for_ui, encryptor_for_ui, data_dir);
+    let app = MenuBarApp::new(db_for_ui, encryptor_for_ui, data_dir, pro_flag);
 
     info!("Launching menu bar app...");
 

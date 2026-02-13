@@ -1,6 +1,7 @@
 // Menu bar application using Cacao
 use cacao::appkit::AppDelegate;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use crate::storage::{AppConfig, Database, Encryptor};
@@ -14,12 +15,13 @@ pub struct MenuBarApp {
     encryptor: Arc<Mutex<Encryptor>>,
     popup: Arc<Mutex<PopupWindow>>,
     data_dir: PathBuf,
+    pro_flag: Arc<AtomicBool>,
     status_bar: RefCell<Option<StatusBarController>>,
     hotkey: RefCell<Option<HotkeyManager>>,
 }
 
 impl MenuBarApp {
-    pub fn new(db: Database, encryptor: Encryptor, data_dir: PathBuf) -> Self {
+    pub fn new(db: Database, encryptor: Encryptor, data_dir: PathBuf, pro_flag: Arc<AtomicBool>) -> Self {
         log::info!("Creating menu bar app...");
         let db_arc = Arc::new(Mutex::new(db));
         let enc_arc = Arc::new(Mutex::new(encryptor));
@@ -33,6 +35,7 @@ impl MenuBarApp {
             encryptor: enc_arc,
             popup,
             data_dir,
+            pro_flag,
             status_bar: RefCell::new(None),
             hotkey: RefCell::new(None),
         }
@@ -121,12 +124,13 @@ impl AppDelegate for MenuBarApp {
             }
         }
 
-        // Create status bar icon (pass popup, encryptor, and data_dir so menu items work)
+        // Create status bar icon (pass popup, encryptor, data_dir, and pro flag so menu items work)
         *self.status_bar.borrow_mut() = Some(StatusBarController::new(
             Arc::clone(&self.db),
             Arc::clone(&self.popup),
             Arc::clone(&self.encryptor),
             self.data_dir.clone(),
+            Arc::clone(&self.pro_flag),
         ));
 
         // Register global hotkey (events polled in main.rs)
