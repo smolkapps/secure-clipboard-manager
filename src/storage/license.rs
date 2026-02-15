@@ -17,8 +17,7 @@ const GRACE_PERIOD_SECS: i64 = 30 * 24 * 3600;
 pub const FREE_HISTORY_LIMIT: usize = 25;
 
 /// Checkout URL for ClipVault Pro
-pub const CHECKOUT_URL: &str =
-    "https://smolkapps.lemonsqueezy.com/checkout/buy/76a9fa07-c442-4f26-a9d6-3642f7486dbc";
+pub const CHECKOUT_URL: &str = "https://smolkin.org/clipvault-license";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseInfo {

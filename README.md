@@ -1,6 +1,6 @@
 # 🔐 ClipVault - Secure Clipboard Manager for macOS
 
-[![Get ClipVault Pro - $12.99](https://img.shields.io/badge/Get_Pro-$12.99-blue?style=for-the-badge)](https://smolkapps.lemonsqueezy.com/checkout/buy/76a9fa07-c442-4f26-a9d6-3642f7486dbc)
+[![Get ClipVault Pro - $12.99](https://img.shields.io/badge/Get_Pro-$12.99-blue?style=for-the-badge)](https://smolkin.org/clipvault-license)
 [![macOS 12+](https://img.shields.io/badge/macOS-12%2B-black?style=for-the-badge&logo=apple)](https://github.com/smolkapps/secure-clipboard-manager)
 [![Built with Rust](https://img.shields.io/badge/Rust-native-orange?style=for-the-badge&logo=rust)](https://github.com/smolkapps/secure-clipboard-manager)
 
@@ -233,7 +233,7 @@ cargo clippy
 
 ## 📄 License
 
-ClipVault Core is free to use. ClipVault Pro ($12.99 one-time) unlocks unlimited history, AES-256-GCM encryption, and sensitive data auto-detection. [Get Pro](https://smolkapps.lemonsqueezy.com/checkout/buy/76a9fa07-c442-4f26-a9d6-3642f7486dbc)
+ClipVault Core is free to use. ClipVault Pro ($12.99 one-time) unlocks unlimited history, AES-256-GCM encryption, and sensitive data auto-detection. [Get Pro](https://smolkin.org/clipvault-license)
 
 ## 🙏 Acknowledgments
 
