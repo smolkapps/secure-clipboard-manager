@@ -11,6 +11,7 @@ use objc2_foundation::{NSString, NSRect, NSPoint, NSSize, MainThreadMarker, NSMu
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 use crate::storage::{Database, Encryptor, ClipboardItem};
+use crate::storage::search::SearchEngine;
 use objc2_app_kit::NSPasteboard;
 
 // Global reference to the popup so ObjC key handler can access it
@@ -35,8 +36,6 @@ declare_class!(
         fn key_down(&self, event: &NSEvent) {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let key_code = unsafe { event.keyCode() };
-                // Check by keyCode first: arrows, return, escape
-                // Arrow down = 125, Arrow up = 126, Return = 36, Escape = 53
                 match key_code {
                     125 => {
                         // Down arrow
@@ -63,57 +62,70 @@ declare_class!(
                         }
                     }
                     53 => {
-                        // Escape - hide window
+                        // Escape - clear search if active, otherwise hide
                         if let Some(popup) = POPUP_FOR_KEYS.get() {
                             if let Ok(mut popup) = popup.lock() {
-                                popup.hide();
+                                if popup.has_active_search() {
+                                    popup.clear_search();
+                                } else {
+                                    popup.hide();
+                                }
+                            }
+                        }
+                    }
+                    51 => {
+                        // Backspace - delete last search character
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(popup) = popup.lock() {
+                                popup.delete_search_char();
+                            }
+                        }
+                    }
+                    48 => {
+                        // Tab - cycle type filter, Shift+Tab - cycle time filter
+                        if let Some(popup) = POPUP_FOR_KEYS.get() {
+                            if let Ok(popup) = popup.lock() {
+                                let has_shift = unsafe {
+                                    event.modifierFlags().contains(
+                                        objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagShift
+                                    )
+                                };
+                                if has_shift {
+                                    popup.cycle_time_filter();
+                                } else {
+                                    popup.cycle_type_filter();
+                                }
                             }
                         }
                     }
                     _ => {
-                        // Check for modifier keys (Cmd+C etc.) - forward to super
+                        // Forward Cmd+key combos (like Cmd+C) to NSTextView
                         let has_cmd = unsafe {
                             event.modifierFlags().contains(
                                 objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand
                             )
                         };
                         if has_cmd {
-                            // Forward Cmd+key combos (like Cmd+C) to NSTextView
                             unsafe {
                                 let _: () = objc2::msg_send![super(self), keyDown: event];
                             }
                             return;
                         }
 
-                        // Check character keys (j/k for vim-style navigation)
-                        let handled = unsafe {
+                        // All printable characters go to search
+                        unsafe {
                             if let Some(chars) = event.charactersIgnoringModifiers() {
                                 let s = chars.to_string();
-                                match s.as_str() {
-                                    "j" => {
+                                for c in s.chars() {
+                                    if !c.is_control() {
                                         if let Some(popup) = POPUP_FOR_KEYS.get() {
                                             if let Ok(popup) = popup.lock() {
-                                                popup.move_selection_down();
+                                                popup.append_search_char(c);
                                             }
                                         }
-                                        true
                                     }
-                                    "k" => {
-                                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                                            if let Ok(popup) = popup.lock() {
-                                                popup.move_selection_up();
-                                            }
-                                        }
-                                        true
-                                    }
-                                    _ => false,
                                 }
-                            } else {
-                                false
                             }
-                        };
-                        if !handled {
-                            // Swallow unhandled keys to prevent beeping
                         }
                     }
                 }
@@ -163,6 +175,81 @@ impl WindowDelegate {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum TypeFilter {
+    All,
+    Text,
+    Image,
+    Url,
+}
+
+impl TypeFilter {
+    fn next(self) -> Self {
+        match self {
+            TypeFilter::All => TypeFilter::Text,
+            TypeFilter::Text => TypeFilter::Image,
+            TypeFilter::Image => TypeFilter::Url,
+            TypeFilter::Url => TypeFilter::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            TypeFilter::All => "All types",
+            TypeFilter::Text => "Text",
+            TypeFilter::Image => "Images",
+            TypeFilter::Url => "URLs",
+        }
+    }
+
+    fn db_value(self) -> Option<&'static str> {
+        match self {
+            TypeFilter::All => None,
+            TypeFilter::Text => Some("text"),
+            TypeFilter::Image => Some("image"),
+            TypeFilter::Url => Some("url"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum TimeFilter {
+    AllTime,
+    Today,
+    ThisWeek,
+    ThisMonth,
+}
+
+impl TimeFilter {
+    fn next(self) -> Self {
+        match self {
+            TimeFilter::AllTime => TimeFilter::Today,
+            TimeFilter::Today => TimeFilter::ThisWeek,
+            TimeFilter::ThisWeek => TimeFilter::ThisMonth,
+            TimeFilter::ThisMonth => TimeFilter::AllTime,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            TimeFilter::AllTime => "All time",
+            TimeFilter::Today => "Today",
+            TimeFilter::ThisWeek => "This week",
+            TimeFilter::ThisMonth => "This month",
+        }
+    }
+
+    fn timestamp_cutoff(self) -> Option<i64> {
+        let now = chrono::Utc::now().timestamp();
+        match self {
+            TimeFilter::AllTime => None,
+            TimeFilter::Today => Some(now - 86400),
+            TimeFilter::ThisWeek => Some(now - 7 * 86400),
+            TimeFilter::ThisMonth => Some(now - 30 * 86400),
+        }
+    }
+}
+
 pub struct PopupWindow {
     db: Arc<Mutex<Database>>,
     encryptor: Arc<Mutex<Encryptor>>,
@@ -173,6 +260,10 @@ pub struct PopupWindow {
     selected_index: RefCell<usize>,
     visible: bool,
     auto_refresh_active: Arc<AtomicBool>,
+    search_query: RefCell<String>,
+    type_filter: RefCell<TypeFilter>,
+    time_filter: RefCell<TimeFilter>,
+    search_engine: SearchEngine,
 }
 
 // SAFETY: PopupWindow contains NSWindow which is !Send, but we only access it
@@ -194,6 +285,10 @@ impl PopupWindow {
             selected_index: RefCell::new(0),
             visible: false,
             auto_refresh_active: Arc::new(AtomicBool::new(false)),
+            search_query: RefCell::new(String::new()),
+            type_filter: RefCell::new(TypeFilter::All),
+            time_filter: RefCell::new(TimeFilter::AllTime),
+            search_engine: SearchEngine::new(),
         }
     }
 
@@ -278,7 +373,10 @@ impl PopupWindow {
     }
 
     fn load_items(&self, reset_selection: bool) {
-        // Handle poisoned mutex gracefully
+        let search_query = self.search_query.borrow().clone();
+        let type_f = *self.type_filter.borrow();
+        let time_f = *self.time_filter.borrow();
+
         let db_result = self.db.lock();
         let db_guard = match db_result {
             Ok(guard) => Some(guard),
@@ -288,17 +386,34 @@ impl PopupWindow {
             }
         };
         if let Some(db) = db_guard {
-            match db.get_recent_items(20) {
+            let has_search = !search_query.is_empty();
+            let has_filters = type_f != TypeFilter::All || time_f != TimeFilter::AllTime;
+            let fetch_limit = if has_search { 200 } else { 20 };
+
+            let db_items = if has_filters {
+                db.search_items(type_f.db_value(), time_f.timestamp_cutoff(), fetch_limit)
+            } else {
+                db.get_recent_items(fetch_limit)
+            };
+
+            match db_items {
                 Ok(items) => {
+                    let final_items = if has_search {
+                        let results = self.search_engine.search(&items, &search_query);
+                        results.into_iter().map(|(_, item)| item.clone()).take(20).collect()
+                    } else {
+                        items
+                    };
+
                     if reset_selection {
                         *self.selected_index.borrow_mut() = 0;
                     } else {
                         let mut idx = self.selected_index.borrow_mut();
-                        if *idx >= items.len() {
-                            *idx = if items.is_empty() { 0 } else { items.len() - 1 };
+                        if *idx >= final_items.len() {
+                            *idx = if final_items.is_empty() { 0 } else { final_items.len() - 1 };
                         }
                     }
-                    *self.items.borrow_mut() = items;
+                    *self.items.borrow_mut() = final_items;
                 }
                 Err(e) => log::error!("Failed to load items: {}", e),
             }
@@ -323,19 +438,47 @@ impl PopupWindow {
             let bg_key = NSString::from_str("NSBackgroundColor");
             let font_key = NSString::from_str("NSFont");
 
+            // Search state
+            let search_q = self.search_query.borrow().clone();
+            let type_f = *self.type_filter.borrow();
+            let time_f = *self.time_filter.borrow();
+            let search_active = !search_q.is_empty()
+                || type_f != TypeFilter::All
+                || time_f != TimeFilter::AllTime;
+
             // Header
             Self::append_styled_line(
                 &mut result, "  Clipboard History\n",
                 &bold_font, &NSColor::labelColor(), None, &font_key, &fg_key, &bg_key,
             );
-            Self::append_styled_line(
-                &mut result, "  ↑↓/j/k navigate • Enter paste • Esc close\n\n",
-                &small_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
-            );
+
+            if search_active {
+                let filter_line = format!("  [{}]  [{}]\n",
+                    type_f.label(), time_f.label());
+                Self::append_styled_line(
+                    &mut result, &filter_line,
+                    &small_font, &NSColor::systemBlueColor(), None, &font_key, &fg_key, &bg_key,
+                );
+                let search_line = format!("  > {}_\n\n", search_q);
+                Self::append_styled_line(
+                    &mut result, &search_line,
+                    &mono_font, &NSColor::labelColor(), None, &font_key, &fg_key, &bg_key,
+                );
+            } else {
+                Self::append_styled_line(
+                    &mut result, "  Type to search | Tab filter | Esc close\n\n",
+                    &small_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
+                );
+            }
 
             if items.is_empty() {
+                let empty_msg = if search_active {
+                    "  No results found.\n"
+                } else {
+                    "  No clipboard history yet.\n  Copy something to get started!\n"
+                };
                 Self::append_styled_line(
-                    &mut result, "  No clipboard history yet.\n  Copy something to get started!\n",
+                    &mut result, empty_msg,
                     &mono_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
                 );
             } else {
@@ -514,6 +657,11 @@ impl PopupWindow {
                     let window = self.build_window(mtm);
                     *self.window.borrow_mut() = Some(window);
                 }
+
+                // Reset search state on open
+                *self.search_query.borrow_mut() = String::new();
+                *self.type_filter.borrow_mut() = TypeFilter::All;
+                *self.time_filter.borrow_mut() = TimeFilter::AllTime;
 
                 // Load and display items
                 self.load_items(true);
@@ -717,6 +865,53 @@ impl PopupWindow {
         }
 
         self.hide();
+    }
+
+    pub fn append_search_char(&self, c: char) {
+        self.search_query.borrow_mut().push(c);
+        self.load_items(true);
+        self.refresh_display();
+    }
+
+    pub fn delete_search_char(&self) {
+        {
+            let mut q = self.search_query.borrow_mut();
+            q.pop();
+        }
+        self.load_items(true);
+        self.refresh_display();
+    }
+
+    pub fn clear_search(&self) {
+        *self.search_query.borrow_mut() = String::new();
+        *self.type_filter.borrow_mut() = TypeFilter::All;
+        *self.time_filter.borrow_mut() = TimeFilter::AllTime;
+        self.load_items(true);
+        self.refresh_display();
+    }
+
+    pub fn has_active_search(&self) -> bool {
+        !self.search_query.borrow().is_empty()
+            || *self.type_filter.borrow() != TypeFilter::All
+            || *self.time_filter.borrow() != TimeFilter::AllTime
+    }
+
+    pub fn cycle_type_filter(&self) {
+        {
+            let mut f = self.type_filter.borrow_mut();
+            *f = f.next();
+        }
+        self.load_items(true);
+        self.refresh_display();
+    }
+
+    pub fn cycle_time_filter(&self) {
+        {
+            let mut f = self.time_filter.borrow_mut();
+            *f = f.next();
+        }
+        self.load_items(true);
+        self.refresh_display();
     }
 
 }

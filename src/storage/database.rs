@@ -444,6 +444,59 @@ impl Database {
         Ok(count)
     }
 
+    /// Search clipboard items with optional type and time filters
+    pub fn search_items(
+        &self,
+        type_filter: Option<&str>,
+        time_after: Option<i64>,
+        limit: i32,
+    ) -> Result<Vec<ClipboardItem>> {
+        let mut sql = String::from(
+            "SELECT id, timestamp, data_type, is_sensitive, is_encrypted, \
+             preview_text, data_size, data_blob_id, metadata, COALESCE(copy_count, 1) \
+             FROM clipboard_items"
+        );
+
+        let mut conditions = Vec::new();
+        let mut values: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(dtype) = type_filter {
+            conditions.push("data_type = ?");
+            values.push(rusqlite::types::Value::Text(dtype.to_string()));
+        }
+
+        if let Some(after) = time_after {
+            conditions.push("timestamp > ?");
+            values.push(rusqlite::types::Value::Integer(after));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY timestamp DESC LIMIT ?");
+        values.push(rusqlite::types::Value::Integer(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let items = stmt.query_map(rusqlite::params_from_iter(values), |row| {
+            Ok(ClipboardItem {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                data_type: row.get(2)?,
+                is_sensitive: row.get(3)?,
+                is_encrypted: row.get(4)?,
+                preview_text: row.get(5)?,
+                data_size: row.get(6)?,
+                data_blob_id: row.get(7)?,
+                metadata: row.get(8)?,
+                copy_count: row.get(9)?,
+            })
+        })?;
+
+        items.collect()
+    }
+
     /// Get total item count
     pub fn count_items(&self) -> Result<i64> {
         let count: i64 = self.conn.query_row(
