@@ -546,7 +546,7 @@ impl PopupWindow {
                 );
             } else {
                 for (i, item) in items.iter().enumerate() {
-                    item_char_positions.push(result.length() as usize);
+                    item_char_positions.push(result.length());
                     let is_selected = i == selected_idx;
                     let pin = if item.is_pinned { "📌" } else { "" };
                     let icon = match item.data_type.as_str() {
@@ -593,7 +593,7 @@ impl PopupWindow {
                     );
                 }
                 // Sentinel: marks end of last item
-                item_char_positions.push(result.length() as usize);
+                item_char_positions.push(result.length());
             }
 
             *self.item_char_starts.borrow_mut() = item_char_positions;
