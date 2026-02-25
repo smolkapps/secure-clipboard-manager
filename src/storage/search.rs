@@ -71,7 +71,7 @@ mod tests {
             data_size: preview.len() as i64,
             data_blob_id: id,
             metadata: None,
-            copy_count: 1,
+            is_pinned: false,
         }
     }
 

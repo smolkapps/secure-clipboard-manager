@@ -4,6 +4,7 @@ use std::io::Cursor;
 use log::info;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum ProcessedDataType {
     PlainText,
     Rtf,

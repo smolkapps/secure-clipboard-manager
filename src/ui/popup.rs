@@ -13,6 +13,8 @@ use objc2::runtime::AnyObject;
 use crate::storage::{Database, Encryptor, ClipboardItem};
 use crate::storage::search::SearchEngine;
 use objc2_app_kit::NSPasteboard;
+use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 // Global reference to the popup so ObjC key handler can access it
 pub(crate) static POPUP_FOR_KEYS: OnceLock<Arc<Mutex<PopupWindow>>> = OnceLock::new();
@@ -93,17 +95,40 @@ declare_class!(
                         }
                     }
                     _ => {
-                        // Forward Cmd+key combos (like Cmd+C) to NSTextView
                         let has_cmd = unsafe {
                             event.modifierFlags().contains(
                                 objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand
                             )
                         };
+
                         if has_cmd {
-                            unsafe {
-                                let _: () = objc2::msg_send![super(self), keyDown: event];
+                            // Handle Cmd+P (pin) and Cmd+D (delete) ourselves
+                            // P = keyCode 35, D = keyCode 2
+                            match key_code {
+                                35 => {
+                                    // Cmd+P - toggle pin
+                                    if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                                        let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                                        popup.toggle_pin_selected();
+                                    }
+                                    return;
+                                }
+                                2 => {
+                                    // Cmd+D - delete selected item
+                                    if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                                        let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                                        popup.delete_selected();
+                                    }
+                                    return;
+                                }
+                                _ => {
+                                    // Forward other Cmd+key combos to NSTextView
+                                    unsafe {
+                                        let _: () = objc2::msg_send![super(self), keyDown: event];
+                                    }
+                                    return;
+                                }
                             }
-                            return;
                         }
 
                         // All printable characters go to search
@@ -502,7 +527,7 @@ impl PopupWindow {
                 );
             } else {
                 Self::append_styled_line(
-                    &mut result, "  Type to search | Tab filter | Esc close\n\n",
+                    &mut result, "  Type to search | Tab filter | \u{2318}P pin | \u{2318}D delete | Esc close\n\n",
                     &small_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
                 );
             }
@@ -523,6 +548,7 @@ impl PopupWindow {
                 for (i, item) in items.iter().enumerate() {
                     item_char_positions.push(result.length() as usize);
                     let is_selected = i == selected_idx;
+                    let pin = if item.is_pinned { "📌" } else { "" };
                     let icon = match item.data_type.as_str() {
                         "image" => "🖼️",
                         "url" => "🔗",
@@ -531,8 +557,9 @@ impl PopupWindow {
                     let lock = if item.is_sensitive { " 🔒" } else { "" };
 
                     let preview = item.preview_text.as_deref().unwrap_or("[No preview]");
-                    let preview_short = if preview.chars().count() > 70 {
-                        format!("{}...", preview.chars().take(70).collect::<String>())
+                    let max_preview = if item.is_pinned { 62 } else { 65 };
+                    let preview_short = if preview.chars().count() > max_preview {
+                        format!("{}...", preview.chars().take(max_preview).collect::<String>())
                     } else {
                         preview.to_string()
                     };
@@ -544,7 +571,7 @@ impl PopupWindow {
                     };
 
                     let marker = if is_selected { "▶" } else { " " };
-                    let line = format!(" {} {} {}{}{}\n", marker, icon, preview_short, count_badge, lock);
+                    let line = format!(" {} {}{} {}{}{}\n", marker, pin, icon, preview_short, count_badge, lock);
 
                     let bg_color = if is_selected {
                         Some(NSColor::selectedContentBackgroundColor())
@@ -588,7 +615,9 @@ impl PopupWindow {
                 } else {
                     String::new()
                 };
-                let header = format!("  {}{}\n\n", type_label, count_info);
+                let pin_info = if selected_item.is_pinned { " • 📌 pinned" } else { "" };
+                let time_info = Self::format_relative_time(selected_item.timestamp);
+                let header = format!("  {} • {}{}{}\n\n", type_label, time_info, count_info, pin_info);
                 Self::append_styled_line(
                     &mut result, &header,
                     &bold_font, &NSColor::secondaryLabelColor(), None, &font_key, &fg_key, &bg_key,
@@ -891,14 +920,14 @@ impl PopupWindow {
                                 let ns_data = NSData::with_bytes(&data);
                                 let type_str = NSString::from_str("public.png");
                                 pb.setData_forType(Some(&ns_data), &type_str);
-                                log::info!("✓ Pasted image to clipboard");
+                                log::info!("✓ Set image on clipboard");
                             }
                             _ => {
                                 let text = String::from_utf8_lossy(&data);
                                 let ns_str = NSString::from_str(&text);
                                 let type_str = NSString::from_str("public.utf8-plain-text");
                                 pb.setString_forType(&ns_str, &type_str);
-                                log::info!("✓ Pasted text to clipboard");
+                                log::info!("✓ Set text on clipboard");
                             }
                         }
                     }
@@ -907,6 +936,48 @@ impl PopupWindow {
         }
 
         self.hide();
+
+        // Simulate Cmd+V after a short delay to paste into the previously active app
+        std::thread::spawn(|| {
+            // Wait for the popup to fully hide and the previous app to regain focus
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Self::simulate_paste();
+        });
+    }
+
+    /// Simulate Cmd+V keystroke via CGEvent API to paste into the active app
+    fn simulate_paste() {
+        const KVK_ANSI_V: u16 = 0x09;
+
+        let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+            Ok(s) => s,
+            Err(_) => {
+                log::error!("Failed to create CGEventSource for paste simulation");
+                return;
+            }
+        };
+
+        let key_down = match CGEvent::new_keyboard_event(source.clone(), KVK_ANSI_V, true) {
+            Ok(e) => e,
+            Err(_) => {
+                log::error!("Failed to create key-down event for paste");
+                return;
+            }
+        };
+        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_down.post(CGEventTapLocation::HID);
+
+        let key_up = match CGEvent::new_keyboard_event(source, KVK_ANSI_V, false) {
+            Ok(e) => e,
+            Err(_) => {
+                log::error!("Failed to create key-up event for paste");
+                return;
+            }
+        };
+        key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_up.post(CGEventTapLocation::HID);
+
+        log::info!("✓ Simulated Cmd+V paste into active app");
     }
 
     pub fn append_search_char(&self, c: char) {
@@ -980,4 +1051,64 @@ impl PopupWindow {
         }
     }
 
+    /// Toggle pin on the selected item
+    pub fn toggle_pin_selected(&self) {
+        let idx = *self.selected_index.borrow();
+        let item_id = {
+            let items = self.items.borrow();
+            items.get(idx).map(|i| i.id)
+        };
+        if let Some(id) = item_id {
+            let db = match self.db.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            match db.toggle_pin(id) {
+                Ok(pinned) => log::info!("{} item #{}", if pinned { "📌 Pinned" } else { "Unpinned" }, id),
+                Err(e) => log::error!("Failed to toggle pin: {}", e),
+            }
+            drop(db);
+            self.load_items(false);
+            self.refresh_display();
+        }
+    }
+
+    /// Delete the selected item
+    pub fn delete_selected(&self) {
+        let idx = *self.selected_index.borrow();
+        let item_id = {
+            let items = self.items.borrow();
+            items.get(idx).map(|i| i.id)
+        };
+        if let Some(id) = item_id {
+            let db = match self.db.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            match db.delete_item(id) {
+                Ok(()) => log::info!("🗑️ Deleted item #{}", id),
+                Err(e) => log::error!("Failed to delete item: {}", e),
+            }
+            drop(db);
+            self.load_items(false);
+            self.refresh_display();
+        }
+    }
+
+    /// Format a timestamp as relative time (e.g., "2m ago", "1h ago")
+    fn format_relative_time(timestamp: i64) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let diff = now - timestamp;
+        if diff < 60 {
+            "just now".to_string()
+        } else if diff < 3600 {
+            format!("{}m ago", diff / 60)
+        } else if diff < 86400 {
+            format!("{}h ago", diff / 3600)
+        } else if diff < 7 * 86400 {
+            format!("{}d ago", diff / 86400)
+        } else {
+            format!("{}w ago", diff / (7 * 86400))
+        }
+    }
 }
