@@ -39,62 +39,56 @@ declare_class!(
                 match key_code {
                     125 => {
                         // Down arrow
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(popup) = popup.lock() {
-                                popup.move_selection_down();
-                            }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.move_selection_down();
                         }
                     }
                     126 => {
                         // Up arrow
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(popup) = popup.lock() {
-                                popup.move_selection_up();
-                            }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.move_selection_up();
                         }
                     }
                     36 => {
                         // Return/Enter - paste and close
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(mut popup) = popup.lock() {
-                                popup.paste_and_close();
-                            }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let mut popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.paste_and_close();
                         }
                     }
                     53 => {
                         // Escape - clear search if active, otherwise hide
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(mut popup) = popup.lock() {
-                                if popup.has_active_search() {
-                                    popup.clear_search();
-                                } else {
-                                    popup.hide();
-                                }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let mut popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            if popup.has_active_search() {
+                                popup.clear_search();
+                            } else {
+                                popup.hide();
                             }
                         }
                     }
                     51 => {
                         // Backspace - delete last search character
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(popup) = popup.lock() {
-                                popup.delete_search_char();
-                            }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.delete_search_char();
                         }
                     }
                     48 => {
                         // Tab - cycle type filter, Shift+Tab - cycle time filter
-                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                            if let Ok(popup) = popup.lock() {
-                                let has_shift = unsafe {
-                                    event.modifierFlags().contains(
-                                        objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagShift
-                                    )
-                                };
-                                if has_shift {
-                                    popup.cycle_time_filter();
-                                } else {
-                                    popup.cycle_type_filter();
-                                }
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            let has_shift = unsafe {
+                                event.modifierFlags().contains(
+                                    objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagShift
+                                )
+                            };
+                            if has_shift {
+                                popup.cycle_time_filter();
+                            } else {
+                                popup.cycle_type_filter();
                             }
                         }
                     }
@@ -118,16 +112,57 @@ declare_class!(
                                 let s = chars.to_string();
                                 for c in s.chars() {
                                     if !c.is_control() {
-                                        if let Some(popup) = POPUP_FOR_KEYS.get() {
-                                            if let Ok(popup) = popup.lock() {
-                                                popup.append_search_char(c);
-                                            }
+                                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                                            popup.append_search_char(c);
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                }
+            }));
+        }
+
+        #[method(acceptsFirstResponder)]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[method(mouseDown:)]
+        fn mouse_down(&self, event: &NSEvent) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                unsafe {
+                    let window_point = event.locationInWindow();
+                    let null_view: *const AnyObject = std::ptr::null();
+                    let local_point: NSPoint = msg_send![self, convertPoint: window_point, fromView: null_view];
+
+                    let layout_mgr: *const AnyObject = msg_send![self, layoutManager];
+                    let text_container: *const AnyObject = msg_send![self, textContainer];
+
+                    if layout_mgr.is_null() || text_container.is_null() {
+                        let _: () = objc2::msg_send![super(self), mouseDown: event];
+                        return;
+                    }
+
+                    let mut fraction: f64 = 0.0;
+                    let glyph_idx: usize = msg_send![layout_mgr,
+                        glyphIndexForPoint: local_point
+                        inTextContainer: text_container
+                        fractionOfDistanceThroughGlyph: &mut fraction
+                    ];
+                    let char_idx: usize = msg_send![layout_mgr, characterIndexForGlyphAtIndex: glyph_idx];
+
+                    if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                        let mut popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        if popup.click_item_at_char(char_idx) {
+                            return;
+                        }
+                    }
+
+                    // Not on an item — default text view behavior
+                    let _: () = objc2::msg_send![super(self), mouseDown: event];
                 }
             }));
         }
@@ -153,10 +188,9 @@ declare_class!(
         fn window_will_close(&self, _notification: &AnyObject) {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 log::info!("Window delegate: red X button clicked, calling hide()");
-                if let Some(popup) = POPUP_FOR_KEYS.get() {
-                    if let Ok(mut popup) = popup.lock() {
-                        popup.hide();
-                    }
+                if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                    let mut popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    popup.hide();
                 }
             }));
         }
@@ -264,6 +298,7 @@ pub struct PopupWindow {
     type_filter: RefCell<TypeFilter>,
     time_filter: RefCell<TimeFilter>,
     search_engine: SearchEngine,
+    item_char_starts: RefCell<Vec<usize>>,
 }
 
 // SAFETY: PopupWindow contains NSWindow which is !Send, but we only access it
@@ -289,6 +324,7 @@ impl PopupWindow {
             type_filter: RefCell::new(TypeFilter::All),
             time_filter: RefCell::new(TimeFilter::AllTime),
             search_engine: SearchEngine::new(),
+            item_char_starts: RefCell::new(Vec::new()),
         }
     }
 
@@ -471,6 +507,8 @@ impl PopupWindow {
                 );
             }
 
+            let mut item_char_positions: Vec<usize> = Vec::new();
+
             if items.is_empty() {
                 let empty_msg = if search_active {
                     "  No results found.\n"
@@ -483,6 +521,7 @@ impl PopupWindow {
                 );
             } else {
                 for (i, item) in items.iter().enumerate() {
+                    item_char_positions.push(result.length() as usize);
                     let is_selected = i == selected_idx;
                     let icon = match item.data_type.as_str() {
                         "image" => "🖼️",
@@ -526,7 +565,11 @@ impl PopupWindow {
                         &mono_font, &fg_color, bg_color.as_deref(), &font_key, &fg_key, &bg_key,
                     );
                 }
+                // Sentinel: marks end of last item
+                item_char_positions.push(result.length() as usize);
             }
+
+            *self.item_char_starts.borrow_mut() = item_char_positions;
 
             // Preview pane: show full text of selected item
             if let Some(selected_item) = items.get(selected_idx) {
@@ -679,11 +722,10 @@ impl PopupWindow {
                             dispatch::Queue::main().exec_async(move || {
                                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     if !active_inner.load(Ordering::Relaxed) { return; }
-                                    if let Some(popup) = POPUP_FOR_KEYS.get() {
-                                        if let Ok(popup) = popup.lock() {
-                                            popup.load_items(false);
-                                            popup.refresh_display();
-                                        }
+                                    if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                                        let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                                        popup.load_items(false);
+                                        popup.refresh_display();
                                     }
                                 }));
                             });
@@ -912,6 +954,30 @@ impl PopupWindow {
         }
         self.load_items(true);
         self.refresh_display();
+    }
+
+    /// Given a character position in the attributed string, return the item index.
+    fn item_index_at_char(&self, char_pos: usize) -> Option<usize> {
+        let starts = self.item_char_starts.borrow();
+        if starts.len() < 2 { return None; }
+        for i in 0..starts.len() - 1 {
+            if char_pos >= starts[i] && char_pos < starts[i + 1] {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Click handler: select the clicked item and paste it.
+    pub fn click_item_at_char(&mut self, char_pos: usize) -> bool {
+        if let Some(idx) = self.item_index_at_char(char_pos) {
+            *self.selected_index.borrow_mut() = idx;
+            self.refresh_display();
+            self.paste_and_close();
+            true
+        } else {
+            false
+        }
     }
 
 }
