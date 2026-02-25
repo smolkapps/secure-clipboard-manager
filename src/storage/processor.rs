@@ -70,7 +70,7 @@ impl DataProcessor {
         let thumbnail_data = Self::convert_to_png(&thumbnail)?;
 
         // Calculate compression percentage (how much smaller the new file is)
-        let compression_pct = if image_data.len() > 0 {
+        let compression_pct = if !image_data.is_empty() {
             let reduction = ((image_data.len() as f32 - png_data.len() as f32) / image_data.len() as f32 * 100.0) as i32;
             reduction.max(-999).min(100) // Clamp to reasonable range
         } else {

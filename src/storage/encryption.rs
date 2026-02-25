@@ -47,7 +47,7 @@ impl Encryptor {
             let key = ChaCha20Poly1305::generate_key(&mut OsRng);
 
             // Save key with restricted permissions (macOS will set 0600 by default for new files)
-            fs::write(&key_path, &key)
+            fs::write(&key_path, key)
                 .map_err(|e| format!("Failed to save encryption key: {}", e))?;
 
             #[cfg(unix)]
