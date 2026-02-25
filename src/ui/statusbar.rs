@@ -252,6 +252,39 @@ declare_class!(
             });
         }
 
+        #[method(showAbout:)]
+        fn show_about(&self, _sender: &AnyObject) {
+            log::info!("About ClipVault clicked");
+            dispatch::Queue::main().exec_async(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    unsafe {
+                        let mtm = MainThreadMarker::new()
+                            .expect("must be on main thread");
+
+                        let is_pro = SHARED_PRO_FLAG.get()
+                            .map(|f| f.load(Ordering::Relaxed))
+                            .unwrap_or(false);
+
+                        let edition = if is_pro { "Pro" } else { "Free" };
+
+                        let alert = NSAlert::new(mtm);
+                        alert.setAlertStyle(NSAlertStyle::Informational);
+                        alert.setMessageText(&NSString::from_str(
+                            &format!("ClipVault {} v{}", edition, env!("CARGO_PKG_VERSION"))
+                        ));
+                        alert.setInformativeText(&NSString::from_str(
+                            "Secure clipboard manager for macOS.\n\n\
+                             Built with Rust. AES-256-GCM encryption.\n\
+                             Auto-detects and protects sensitive data.\n\n\
+                             \u{00A9} 2026 SmolkApps"
+                        ));
+                        alert.addButtonWithTitle(&NSString::from_str("OK"));
+                        alert.runModal();
+                    }
+                }));
+            });
+        }
+
         #[method(menuNeedsUpdate:)]
         fn menu_needs_update(&self, menu: &NSMenu) {
             unsafe {
@@ -435,6 +468,10 @@ impl StatusBarController {
             Self::add_action_item(menu, "Enter License Key...", None, sel!(enterLicense:), target, mtm);
             Self::add_action_item(menu, "Get ClipVault Pro — $12.99", None, sel!(getPro:), target, mtm);
         }
+        Self::add_separator(menu, mtm);
+
+        // About
+        Self::add_action_item(menu, "About ClipVault", None, sel!(showAbout:), target, mtm);
         Self::add_separator(menu, mtm);
 
         // Quit

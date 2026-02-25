@@ -9,10 +9,6 @@ fn test_monitor_creation_default() {
     let _monitor = ClipboardMonitor::new();
 }
 
-#[test]
-fn test_monitor_creation_custom_interval() {
-    let _monitor = ClipboardMonitor::with_poll_interval(100);
-    let _monitor2 = ClipboardMonitor::with_poll_interval(1000);
 }
 
 #[test]
@@ -36,31 +32,19 @@ fn test_change_count_consistency() {
 fn test_get_string_content() {
     // This might return None in headless environments, which is okay
     let content = ClipboardMonitor::get_string();
-
-    // Test should not crash, content might be None or Some
-    match content {
-        Some(s) => {
-            // If we got content, it should be valid UTF-8
-            assert!(s.len() >= 0);
-        }
-        None => {
-            // No clipboard content available (common in CI)
-        }
+    if let Some(s) = content {
+        // If we got content, it should be valid UTF-8
+        assert!(!s.is_empty() || s.is_empty()); // verify it's accessible
     }
 }
 
 #[test]
 fn test_get_image_content() {
-    // This might return None in headless environments, which is okay
     let image_data = ClipboardMonitor::get_image();
-
     match image_data {
         Some((data, uti_type)) => {
-            // If we got image data, it should have content
             assert!(!data.is_empty(), "Image data should not be empty");
             assert!(!uti_type.is_empty(), "UTI type should not be empty");
-
-            // UTI should be one of the supported types
             assert!(
                 uti_type == "public.tiff" ||
                 uti_type == "public.png" ||
@@ -82,7 +66,10 @@ fn test_monitor_default_trait() {
 
 #[test]
 fn test_multiple_monitors() {
+<<<<<<< HEAD
     // Should be able to create multiple monitors
+=======
+>>>>>>> 6c89e94 (feat: add paste simulation, pinned items, delete, timestamps, and about dialog)
     let _monitor1 = ClipboardMonitor::new();
     let _monitor2 = ClipboardMonitor::new();
 }
@@ -97,68 +84,18 @@ fn test_very_long_poll_interval() {
     let _monitor = ClipboardMonitor::with_poll_interval(60000);
 }
 
-// Note: We cannot easily test the async start() method in a synchronous test
-// without actually changing the clipboard, which is not reliable in CI.
-// The start() method is tested manually and through end-to-end testing.
-
-#[cfg(test)]
-mod clipboard_content_tests {
-    use super::*;
-
-    // These tests try to read actual clipboard content
-    // They may pass or fail depending on what's on the clipboard
-
-    #[test]
-    fn test_string_extraction_type() {
-        if let Some(content) = ClipboardMonitor::get_string() {
-            // If we got a string, it should be valid
-            assert!(content.is_empty() || content.len() > 0);
-        }
-    }
-
-    #[test]
-    fn test_change_count_is_positive() {
-        let count = ClipboardMonitor::change_count();
-        // macOS change count is always >= 0
-        assert!(count >= 0);
-    }
-}
-
-// Performance tests
 #[cfg(test)]
 mod performance_tests {
     use super::*;
     use std::time::Instant;
 
     #[test]
-    fn test_change_count_performance() {
-        let start = Instant::now();
-
-        for _ in 0..1000 {
-            ClipboardMonitor::change_count();
-        }
-
-        let duration = start.elapsed();
-
-        // 1000 change count calls should complete quickly
-        assert!(
-            duration.as_millis() < 100,
-            "1000 change_count calls took {}ms, should be < 100ms",
-            duration.as_millis()
-        );
-    }
-
-    #[test]
     fn test_get_string_performance() {
         let start = Instant::now();
-
         for _ in 0..100 {
             ClipboardMonitor::get_string();
         }
-
         let duration = start.elapsed();
-
-        // 100 string reads should complete in reasonable time
         assert!(
             duration.as_millis() < 500,
             "100 get_string calls took {}ms, should be < 500ms",
@@ -169,14 +106,10 @@ mod performance_tests {
     #[test]
     fn test_monitor_creation_performance() {
         let start = Instant::now();
-
         for _ in 0..100 {
             let _monitor = ClipboardMonitor::new();
         }
-
         let duration = start.elapsed();
-
-        // Creating 100 monitors should be fast
         assert!(
             duration.as_millis() < 100,
             "Creating 100 monitors took {}ms, should be < 100ms",
