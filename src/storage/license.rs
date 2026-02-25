@@ -79,6 +79,7 @@ impl LicenseManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_pro(&self) -> bool {
         self.pro_flag.load(Ordering::Relaxed)
     }

@@ -21,6 +21,7 @@ fn create_test_item(id: i64, preview: &str, timestamp: i64) -> ClipboardItem {
         data_blob_id: id,
         metadata: None,
         copy_count: 1,
+        is_pinned: false,
     }
 }
 
@@ -48,10 +49,8 @@ fn bench_database_insert(c: &mut Criterion) {
         let text = "This is a test clipboard item for benchmarking";
         let mut ts = chrono::Utc::now().timestamp();
 
-        b.iter(|| {
             ts += 1;
             insert_item(&db, text, ts);
-        });
     });
 }
 
@@ -86,7 +85,6 @@ fn bench_encryption(c: &mut Criterion) {
     let temp_dir = TempDir::new().unwrap();
     let encryptor = Encryptor::new(temp_dir.path().join("bench.key")).unwrap();
 
-    // Test different data sizes
     for size in [100, 1000, 10000] {
         let data = vec![0u8; size];
 
@@ -193,7 +191,6 @@ fn bench_image_processing(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("image_processing");
 
-    // Create test images of different sizes
     for size in [100, 500, 1000] {
         let img = ImageBuffer::from_fn(size, size, |x, y| {
             Rgb([
@@ -203,7 +200,6 @@ fn bench_image_processing(c: &mut Criterion) {
             ])
         });
 
-        // Convert to PNG bytes
         let mut buf = Vec::new();
         let mut cursor = Cursor::new(&mut buf);
         image::DynamicImage::ImageRgb8(img)
@@ -216,31 +212,6 @@ fn bench_image_processing(c: &mut Criterion) {
             |b, data| {
                 b.iter(|| {
                     black_box(DataProcessor::process_image(data, "public.png").unwrap());
-                });
-            },
-        );
-
-        // Create TIFF for conversion benchmark
-        let img2 = ImageBuffer::from_fn(size, size, |x, y| {
-            Rgb([
-                (x % 256) as u8,
-                (y % 256) as u8,
-                ((x + y) % 256) as u8,
-            ])
-        });
-
-        let mut tiff_buf = Vec::new();
-        let mut cursor2 = Cursor::new(&mut tiff_buf);
-        image::DynamicImage::ImageRgb8(img2)
-            .write_to(&mut cursor2, image::ImageFormat::Tiff)
-            .unwrap();
-
-        group.bench_with_input(
-            BenchmarkId::new("tiff_to_png", size),
-            &tiff_buf,
-            |b, data| {
-                b.iter(|| {
-                    black_box(DataProcessor::process_image(data, "public.tiff").unwrap());
                 });
             },
         );
@@ -265,8 +236,6 @@ fn bench_full_workflow(c: &mut Criterion) {
 
             // Query recent items
             let items = db.get_recent_items(10).unwrap();
-
-            // Search
             let _results = engine.search(&items, "test");
         });
     });

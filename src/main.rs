@@ -131,11 +131,9 @@ fn main() {
             info!("   Auto-detecting and encrypting sensitive data");
             info!("");
 
-            // Spawn monitor task
+            // Spawn monitor task (runs forever)
             let monitor_handle = tokio::spawn(async move {
-                if let Err(e) = monitor.start(tx).await {
-                    error!("Clipboard monitor error: {}", e);
-                }
+                monitor.start(tx).await;
             });
 
             // Process clipboard changes and store them

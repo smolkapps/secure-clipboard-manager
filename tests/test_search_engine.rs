@@ -15,7 +15,7 @@ fn create_test_item(id: i64, preview: &str, data_type: &str, timestamp: i64) -> 
         data_size: preview.len() as i64,
         data_blob_id: id,
         metadata: None,
-        copy_count: 1,
+        is_pinned: false,
     }
 }
 

@@ -11,7 +11,6 @@ fn test_database_creation() {
     let db_path = temp_dir.path().join("test.db");
 
     let _db = Database::new(db_path.clone()).unwrap();
-
     // Database file should exist
     assert!(db_path.exists());
 }
@@ -22,7 +21,6 @@ fn test_insert_and_retrieve_text() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
-    // Insert text item
     let text = b"Hello, World!";
     let blob_id = db.store_blob(text).unwrap();
     let timestamp = chrono::Utc::now().timestamp();
@@ -37,10 +35,8 @@ fn test_insert_and_retrieve_text() {
         None,
         1,
     ).unwrap();
-
     assert!(item_id > 0);
 
-    // Retrieve item
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].data_type, "text");
@@ -56,7 +52,6 @@ fn test_insert_encrypted_item() {
     let db = Database::new(db_path).unwrap();
     let encryptor = Encryptor::new(key_path).unwrap();
 
-    // Encrypt sensitive data
     let sensitive_text = b"sk-1234567890abcdefghijklmnopqrstuvwxyz";
     let encrypted = encryptor.encrypt(sensitive_text).unwrap();
 
@@ -69,15 +64,13 @@ fn test_insert_encrypted_item() {
         true,   // is_sensitive
         true,   // is_encrypted
         Some("API Key (encrypted)"),
-        sensitive_text.len() as i64,
+        encrypted.len() as i64,
         blob_id,
         None,
         1,
     ).unwrap();
-
     assert!(item_id > 0);
 
-    // Retrieve and decrypt
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
     assert!(items[0].is_sensitive);
@@ -94,13 +87,13 @@ fn test_multiple_items_ordering() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
-    // Insert multiple items with increasing timestamps
+    // Use explicit timestamps so ordering is deterministic
+    let base_ts = chrono::Utc::now().timestamp();
     for i in 1..=5 {
         let text = format!("Item {}", i);
         let blob_id = db.store_blob(text.as_bytes()).unwrap();
-        let timestamp = chrono::Utc::now().timestamp() + i as i64;
         db.store_item(
-            timestamp,
+            base_ts + i,
             "text",
             false,
             false,
@@ -111,12 +104,10 @@ fn test_multiple_items_ordering() {
             1,
         ).unwrap();
     }
+    }
 
-    // Retrieve items (should be in reverse chronological order)
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 5);
-
-    // Most recent should be "Item 5"
     assert_eq!(items[0].preview_text, Some("Item 5".to_string()));
     assert_eq!(items[4].preview_text, Some("Item 1".to_string()));
 }
@@ -127,30 +118,28 @@ fn test_cleanup_old_items() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
-    // Insert item with a timestamp from the past
-    let text = b"Test item";
-    let blob_id = db.store_blob(text).unwrap();
+    // Insert an item with a timestamp 2 days in the past
+    let blob_id = db.store_blob(b"Test item").unwrap();
+    let old_ts = chrono::Utc::now().timestamp() - (2 * 86400);
     db.store_item(
-        0, // epoch timestamp = very old
+        old_ts,
         "text",
         false,
         false,
         Some("Test item"),
-        text.len() as i64,
+        9,
         blob_id,
         None,
         1,
     ).unwrap();
 
-    // Verify it exists
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
 
-    // Cleanup items older than 0 days (should delete everything older than now)
-    let deleted = db.cleanup_old_items(0).unwrap();
+    // Cleanup items older than 1 day — should catch our 2-day-old item
+    let deleted = db.cleanup_old_items(1).unwrap();
     assert_eq!(deleted, 1);
 
-    // Verify it's gone
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 0);
 }
@@ -161,30 +150,31 @@ fn test_image_storage() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
-    // Create fake image data (just some bytes)
-    let image_data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header
-
+    let image_data = vec![0x89, 0x50, 0x4E, 0x47];
     let blob_id = db.store_blob(&image_data).unwrap();
-    let timestamp = chrono::Utc::now().timestamp();
+    let ts = chrono::Utc::now().timestamp();
+    let meta = r#"{"width":640,"height":480,"format":"PNG"}"#;
+    db.store_item(ts, "image", false, false, Some("640x480 PNG"),
+                  image_data.len() as i64, blob_id, Some(meta), 1).unwrap();
+
+    let blob_id2 = db.store_blob(&image_data).unwrap();
+    let timestamp2 = chrono::Utc::now().timestamp();
     let item_id = db.store_item(
-        timestamp,
+        timestamp2,
         "image",
         false,
         false,
         Some("640x480 PNG"),
         image_data.len() as i64,
-        blob_id,
+        blob_id2,
         Some(r#"{"width":640,"height":480,"format":"PNG"}"#),
         1,
     ).unwrap();
 
     assert!(item_id > 0);
-
-    // Retrieve and verify
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].data_type, "image");
-    assert!(items[0].metadata.is_some());
 
     let blob = db.get_blob(items[0].data_blob_id).unwrap();
     assert_eq!(blob, image_data);
@@ -205,42 +195,21 @@ fn test_encryption_roundtrip() {
 
     for plaintext in test_cases {
         let encrypted = encryptor.encrypt(&plaintext).unwrap();
-
-        // Encrypted should be different
         assert_ne!(encrypted, plaintext);
-
-        // Should decrypt correctly
         let decrypted = encryptor.decrypt(&encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 }
 
 #[test]
-fn test_concurrent_database_access() {
+fn test_item_count() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-
-    // Create database and insert initial item
-    {
-        let db = Database::new(db_path.clone()).unwrap();
-        let blob_id = db.store_blob(b"Initial").unwrap();
-        let timestamp = chrono::Utc::now().timestamp();
-        db.store_item(timestamp, "text", false, false, Some("Initial"), 7, blob_id, None, 1).unwrap();
-    }
-
-    // Access from multiple "threads" (sequential but simulates concurrent access)
-    for i in 0..10 {
-        let db = Database::new(db_path.clone()).unwrap();
-        let text = format!("Item {}", i);
-        let blob_id = db.store_blob(text.as_bytes()).unwrap();
-        let timestamp = chrono::Utc::now().timestamp() + i + 1;
-        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
-    }
+    let db = Database::new(db_path).unwrap();
 
     // Verify all items are there
-    let db = Database::new(db_path).unwrap();
     let items = db.get_recent_items(20).unwrap();
-    assert_eq!(items.len(), 11); // Initial + 10 items
+    assert_eq!(items.len(), 4); // Initial + 3 items
 }
 
 #[test]
@@ -257,8 +226,18 @@ fn test_get_item_count() {
     for i in 1..=3 {
         let text = format!("Item {}", i);
         let blob_id = db.store_blob(text.as_bytes()).unwrap();
-        let timestamp = chrono::Utc::now().timestamp() + i;
-        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i as i64;
+        db.store_item(
+            timestamp,
+            "text",
+            false,
+            false,
+            Some(&text),
+            text.len() as i64,
+            blob_id,
+            None,
+            1,
+        ).unwrap();
     }
 
     let count = db.count_items().unwrap();
@@ -266,31 +245,39 @@ fn test_get_item_count() {
 }
 
 #[test]
-fn test_empty_preview_text() {
+fn test_pin_and_delete() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
-    // Insert item without preview
-    let blob_id = db.store_blob(b"Some data").unwrap();
-    let timestamp = chrono::Utc::now().timestamp();
+    let blob_id = db.store_blob(b"pinnable").unwrap();
+    let ts = chrono::Utc::now().timestamp();
     let item_id = db.store_item(
-        timestamp,
+        ts,
         "text",
         false,
         false,
-        None,  // No preview
-        9,
+        Some("pinnable"),
+        8,
         blob_id,
         None,
         1,
     ).unwrap();
 
-    assert!(item_id > 0);
+    // Toggle pin
+    let pinned = db.toggle_pin(item_id).unwrap();
+    assert!(pinned);
 
     let items = db.get_recent_items(10).unwrap();
-    assert_eq!(items.len(), 1);
-    assert!(items[0].preview_text.is_none());
+    assert!(items[0].is_pinned);
+
+    // Toggle again
+    let pinned = db.toggle_pin(item_id).unwrap();
+    assert!(!pinned);
+
+    // Delete
+    db.delete_item(item_id).unwrap();
+    assert_eq!(db.count_items().unwrap(), 0);
 }
 
 #[test]

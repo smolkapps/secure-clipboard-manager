@@ -124,6 +124,12 @@ impl Database {
             [],
         );
 
+        // Migration: add is_pinned column (ignore error if column already exists)
+        let _ = self.conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN is_pinned BOOLEAN DEFAULT 0",
+            [],
+        );
+
         // Set schema version
         self.conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
@@ -202,14 +208,14 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Get recent clipboard items (limit by count)
+    /// Get recent clipboard items (limit by count), pinned items first
     pub fn get_recent_items(&self, limit: i32) -> Result<Vec<ClipboardItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, data_type, is_sensitive, is_encrypted,
                     preview_text, data_size, data_blob_id, metadata,
-                    COALESCE(copy_count, 1)
+                    COALESCE(copy_count, 1), COALESCE(is_pinned, 0)
              FROM clipboard_items
-             ORDER BY timestamp DESC
+             ORDER BY is_pinned DESC, timestamp DESC
              LIMIT ?1"
         )?;
 
@@ -225,6 +231,7 @@ impl Database {
                 data_blob_id: row.get(7)?,
                 metadata: row.get(8)?,
                 copy_count: row.get(9)?,
+                is_pinned: row.get(10)?,
             })
         })?;
 
@@ -473,7 +480,8 @@ impl Database {
     ) -> Result<Vec<ClipboardItem>> {
         let mut sql = String::from(
             "SELECT id, timestamp, data_type, is_sensitive, is_encrypted, \
-             preview_text, data_size, data_blob_id, metadata, COALESCE(copy_count, 1) \
+             preview_text, data_size, data_blob_id, metadata, \
+             COALESCE(copy_count, 1), COALESCE(is_pinned, 0) \
              FROM clipboard_items"
         );
 
@@ -495,7 +503,7 @@ impl Database {
             sql.push_str(&conditions.join(" AND "));
         }
 
-        sql.push_str(" ORDER BY timestamp DESC LIMIT ?");
+        sql.push_str(" ORDER BY is_pinned DESC, timestamp DESC LIMIT ?");
         values.push(rusqlite::types::Value::Integer(limit as i64));
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -511,10 +519,38 @@ impl Database {
                 data_blob_id: row.get(7)?,
                 metadata: row.get(8)?,
                 copy_count: row.get(9)?,
+                is_pinned: row.get(10)?,
             })
         })?;
 
         items.collect()
+    }
+
+    /// Toggle pin status of an item
+    pub fn toggle_pin(&self, item_id: i64) -> Result<bool> {
+        let current: bool = self.conn.query_row(
+            "SELECT COALESCE(is_pinned, 0) FROM clipboard_items WHERE id = ?1",
+            params![item_id],
+            |row| row.get(0),
+        )?;
+        let new_val = !current;
+        self.conn.execute(
+            "UPDATE clipboard_items SET is_pinned = ?1 WHERE id = ?2",
+            params![new_val, item_id],
+        )?;
+        Ok(new_val)
+    }
+
+    /// Delete a single item and its blob
+    pub fn delete_item(&self, item_id: i64) -> Result<()> {
+        let blob_id: i64 = self.conn.query_row(
+            "SELECT data_blob_id FROM clipboard_items WHERE id = ?1",
+            params![item_id],
+            |row| row.get(0),
+        )?;
+        self.conn.execute("DELETE FROM clipboard_items WHERE id = ?1", params![item_id])?;
+        self.conn.execute("DELETE FROM clipboard_data WHERE id = ?1", params![blob_id])?;
+        Ok(())
     }
 
     /// Get total item count
@@ -545,8 +581,8 @@ impl Database {
     }
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClipboardItem {
     pub id: i64,
     pub timestamp: i64,
@@ -558,4 +594,5 @@ pub struct ClipboardItem {
     pub data_blob_id: i64,
     pub metadata: Option<String>,
     pub copy_count: i64,
+    pub is_pinned: bool,
 }

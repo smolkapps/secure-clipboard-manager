@@ -10,7 +10,6 @@ use tokio::time::{interval, Duration};
 pub struct ClipboardChange {
     pub change_count: i64,
     pub types: Vec<String>,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 /// ClipboardMonitor polls NSPasteboard for changes
@@ -41,11 +40,12 @@ impl ClipboardMonitor {
         }
     }
 
-    /// Start monitoring clipboard changes, sending events to the provided channel
+    /// Start monitoring clipboard changes, sending events to the provided channel.
+    /// Runs forever (the loop never breaks).
     pub async fn start(
         &mut self,
         tx: mpsc::UnboundedSender<ClipboardChange>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) {
         info!("Starting clipboard monitor...");
         let mut tick = interval(Duration::from_millis(self.poll_interval_ms));
 
@@ -68,7 +68,6 @@ impl ClipboardMonitor {
                 let change = ClipboardChange {
                     change_count: current_count,
                     types: types.clone(),
-                    timestamp: chrono::Utc::now(),
                 };
 
                 info!("Clipboard change detected: {:?}", types);
@@ -76,14 +75,11 @@ impl ClipboardMonitor {
                 // Send change notification (non-fatal: log error but continue monitoring)
                 if let Err(e) = tx.send(change) {
                     log::error!("Failed to send clipboard change (channel error, continuing): {}", e);
-                    // DO NOT break - keep monitoring even if channel fails temporarily
                 }
 
                 self.last_change_count = current_count;
             }
         }
-
-        Ok(())
     }
 
     /// Get list of available UTI types on the pasteboard
@@ -151,7 +147,8 @@ impl ClipboardMonitor {
         }
     }
 
-    /// Get current change count (useful for testing)
+    /// Get current change count (used in tests)
+    #[cfg(test)]
     pub fn change_count() -> i64 {
         unsafe {
             let pasteboard = NSPasteboard::generalPasteboard();
