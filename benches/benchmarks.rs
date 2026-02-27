@@ -1,7 +1,7 @@
 // Performance benchmarks for ClipVault
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use clipboard_manager::storage::{
-    database::{ClipboardDatabase, ClipboardItem},
+    database::{Database, ClipboardItem},
     encryption::Encryptor,
     search::SearchEngine,
     processor::DataProcessor,
@@ -20,25 +20,37 @@ fn create_test_item(id: i64, preview: &str, timestamp: i64) -> ClipboardItem {
         data_size: preview.len() as i64,
         data_blob_id: id,
         metadata: None,
+        copy_count: 1,
     }
+}
+
+// Helper to insert an item into the database using the actual API
+fn insert_item(db: &Database, text: &str, timestamp: i64) -> i64 {
+    let blob_id = db.store_blob(text.as_bytes()).unwrap();
+    db.store_item(
+        timestamp,
+        "text",
+        false,
+        false,
+        Some(text),
+        text.len() as i64,
+        blob_id,
+        None,
+        1,
+    ).unwrap()
 }
 
 // Benchmark: Database insert operations
 fn bench_database_insert(c: &mut Criterion) {
     c.bench_function("database_insert_text", |b| {
         let temp_dir = TempDir::new().unwrap();
-        let db = ClipboardDatabase::new(temp_dir.path().join("bench.db")).unwrap();
+        let db = Database::new(temp_dir.path().join("bench.db")).unwrap();
         let text = "This is a test clipboard item for benchmarking";
+        let mut ts = chrono::Utc::now().timestamp();
 
         b.iter(|| {
-            db.insert_item(
-                "text",
-                false,
-                false,
-                Some(text),
-                text.as_bytes(),
-                None,
-            ).unwrap();
+            ts += 1;
+            insert_item(&db, text, ts);
         });
     });
 }
@@ -46,12 +58,13 @@ fn bench_database_insert(c: &mut Criterion) {
 // Benchmark: Database query operations
 fn bench_database_query(c: &mut Criterion) {
     let temp_dir = TempDir::new().unwrap();
-    let db = ClipboardDatabase::new(temp_dir.path().join("bench.db")).unwrap();
+    let db = Database::new(temp_dir.path().join("bench.db")).unwrap();
 
     // Insert 100 items
+    let base_ts = chrono::Utc::now().timestamp();
     for i in 0..100 {
         let text = format!("Item {}", i);
-        db.insert_item("text", false, false, Some(&text), text.as_bytes(), None).unwrap();
+        insert_item(&db, &text, base_ts + i);
     }
 
     c.bench_function("database_query_recent_10", |b| {
@@ -240,13 +253,15 @@ fn bench_image_processing(c: &mut Criterion) {
 fn bench_full_workflow(c: &mut Criterion) {
     c.bench_function("workflow_insert_and_search", |b| {
         let temp_dir = TempDir::new().unwrap();
-        let db = ClipboardDatabase::new(temp_dir.path().join("bench.db")).unwrap();
+        let db = Database::new(temp_dir.path().join("bench.db")).unwrap();
         let engine = SearchEngine::new();
+        let mut ts = chrono::Utc::now().timestamp();
 
         b.iter(|| {
+            ts += 1;
             // Insert item
             let text = "This is a test clipboard item";
-            db.insert_item("text", false, false, Some(text), text.as_bytes(), None).unwrap();
+            insert_item(&db, text, ts);
 
             // Query recent items
             let items = db.get_recent_items(10).unwrap();

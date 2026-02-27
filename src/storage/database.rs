@@ -234,29 +234,43 @@ impl Database {
     /// Clean up items older than retention period (in days)
     pub fn cleanup_old_items(&self, retention_days: i64) -> Result<usize> {
         let cutoff_timestamp = chrono::Utc::now().timestamp() - (retention_days * 86400);
+        let tx = self.conn.unchecked_transaction()?;
 
-        // Get blob IDs to delete
-        let mut stmt = self.conn.prepare(
-            "SELECT data_blob_id FROM clipboard_items WHERE timestamp < ?1"
-        )?;
-
-        let blob_ids: Vec<i64> = stmt.query_map(params![cutoff_timestamp], |row| {
-            row.get(0)
-        })?.collect::<Result<Vec<_>>>()?;
+        // Get blob IDs to delete (scoped so stmt is dropped before commit)
+        let blob_ids: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT data_blob_id FROM clipboard_items WHERE timestamp < ?1"
+            )?;
+            let result = stmt.query_map(params![cutoff_timestamp], |row| {
+                row.get(0)
+            })?.collect::<Result<Vec<_>>>()?;
+            result
+        };
 
         // Delete clipboard items
-        let deleted_items = self.conn.execute(
+        let deleted_items = tx.execute(
             "DELETE FROM clipboard_items WHERE timestamp < ?1",
             params![cutoff_timestamp],
         )?;
 
-        // Delete orphaned blobs
-        for blob_id in blob_ids {
-            self.conn.execute(
-                "DELETE FROM clipboard_data WHERE id = ?1",
-                params![blob_id],
-            )?;
+        // Delete orphaned blobs in a single statement when possible
+        if !blob_ids.is_empty() {
+            tx.execute(
+                "DELETE FROM clipboard_data WHERE id IN (SELECT data_blob_id FROM clipboard_items WHERE 0) OR id IN (SELECT value FROM json_each(?1))",
+                params![serde_json::to_string(&blob_ids).unwrap_or_default()],
+            ).or_else(|_| {
+                // Fallback: delete one by one if json_each not available
+                for blob_id in &blob_ids {
+                    tx.execute(
+                        "DELETE FROM clipboard_data WHERE id = ?1",
+                        params![blob_id],
+                    )?;
+                }
+                Ok::<usize, rusqlite::Error>(blob_ids.len())
+            })?;
         }
+
+        tx.commit()?;
 
         if deleted_items > 0 {
             info!("🗑️  Cleaned up {} old clipboard items", deleted_items);
@@ -331,26 +345,32 @@ impl Database {
     /// Permanently purge deleted items older than 7 days
     pub fn purge_deleted_items(&self) -> Result<usize> {
         let cutoff = chrono::Utc::now().timestamp() - (7 * 86400);
+        let tx = self.conn.unchecked_transaction()?;
 
-        // Get blob IDs of expired deleted items
-        let mut stmt = self.conn.prepare(
-            "SELECT deleted_blob_id FROM deleted_items WHERE deleted_at < ?1"
-        )?;
-        let blob_ids: Vec<i64> = stmt.query_map(params![cutoff], |row| {
-            row.get(0)
-        })?.collect::<Result<Vec<_>>>()?;
+        // Get blob IDs of expired deleted items (scoped so stmt is dropped before commit)
+        let blob_ids: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT deleted_blob_id FROM deleted_items WHERE deleted_at < ?1"
+            )?;
+            let result = stmt.query_map(params![cutoff], |row| {
+                row.get(0)
+            })?.collect::<Result<Vec<_>>>()?;
+            result
+        };
 
-        let purged = self.conn.execute(
+        let purged = tx.execute(
             "DELETE FROM deleted_items WHERE deleted_at < ?1",
             params![cutoff],
         )?;
 
-        for blob_id in blob_ids {
-            self.conn.execute(
+        for blob_id in &blob_ids {
+            tx.execute(
                 "DELETE FROM deleted_data WHERE id = ?1",
                 params![blob_id],
             )?;
         }
+
+        tx.commit()?;
 
         if purged > 0 {
             info!("🗑️  Purged {} expired deleted items (older than 7 days)", purged);
