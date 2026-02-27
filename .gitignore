@@ -19,3 +19,6 @@ output.txt
 # Build artifacts
 ClipVault.app/
 *.dmg
+
+# Claude memory
+.memory/

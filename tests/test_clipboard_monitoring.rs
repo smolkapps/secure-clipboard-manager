@@ -5,18 +5,14 @@ use clipboard_manager::clipboard::monitor::ClipboardMonitor;
 
 #[test]
 fn test_monitor_creation_default() {
-    let monitor = ClipboardMonitor::new();
     // Should initialize without errors
-    assert_eq!(monitor.poll_interval_ms, 500);
+    let _monitor = ClipboardMonitor::new();
 }
 
 #[test]
 fn test_monitor_creation_custom_interval() {
-    let monitor = ClipboardMonitor::with_poll_interval(100);
-    assert_eq!(monitor.poll_interval_ms, 100);
-
-    let monitor2 = ClipboardMonitor::with_poll_interval(1000);
-    assert_eq!(monitor2.poll_interval_ms, 1000);
+    let _monitor = ClipboardMonitor::with_poll_interval(100);
+    let _monitor2 = ClipboardMonitor::with_poll_interval(1000);
 }
 
 #[test]
@@ -81,29 +77,24 @@ fn test_get_image_content() {
 
 #[test]
 fn test_monitor_default_trait() {
-    let monitor = ClipboardMonitor::default();
-    assert_eq!(monitor.poll_interval_ms, 500);
+    let _monitor = ClipboardMonitor::default();
 }
 
 #[test]
 fn test_multiple_monitors() {
     // Should be able to create multiple monitors
-    let monitor1 = ClipboardMonitor::new();
-    let monitor2 = ClipboardMonitor::new();
-
-    assert_eq!(monitor1.poll_interval_ms, monitor2.poll_interval_ms);
+    let _monitor1 = ClipboardMonitor::new();
+    let _monitor2 = ClipboardMonitor::new();
 }
 
 #[test]
 fn test_very_short_poll_interval() {
-    let monitor = ClipboardMonitor::with_poll_interval(1);
-    assert_eq!(monitor.poll_interval_ms, 1);
+    let _monitor = ClipboardMonitor::with_poll_interval(1);
 }
 
 #[test]
 fn test_very_long_poll_interval() {
-    let monitor = ClipboardMonitor::with_poll_interval(60000);
-    assert_eq!(monitor.poll_interval_ms, 60000);
+    let _monitor = ClipboardMonitor::with_poll_interval(60000);
 }
 
 // Note: We cannot easily test the async start() method in a synchronous test

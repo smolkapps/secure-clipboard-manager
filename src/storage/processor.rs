@@ -176,10 +176,11 @@ impl DataProcessor {
             .collect::<Vec<_>>()
             .join(" ");
 
-        if cleaned.len() <= MAX_PREVIEW {
+        if cleaned.chars().count() <= MAX_PREVIEW {
             cleaned
         } else {
-            format!("{}...", &cleaned[..MAX_PREVIEW])
+            let truncated: String = cleaned.chars().take(MAX_PREVIEW).collect();
+            format!("{}...", truncated)
         }
     }
 
@@ -188,16 +189,21 @@ impl DataProcessor {
         let text_lower = text.to_lowercase();
 
         // Pattern 1: Common password-like patterns
-        // - Min 8 chars, contains special chars, no spaces
+        // - Min 8 chars, has special chars typical of passwords (not URLs), no spaces
+        // - Excludes chars common in URLs/paths (: / . ?) to reduce false positives
         if text.len() >= 8 &&
            text.len() <= 128 &&
            !text.contains(' ') &&
-           text.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)) &&
-           text.chars().any(|c| c.is_ascii_digit()) {
+           !text.starts_with("http://") &&
+           !text.starts_with("https://") &&
+           !text.starts_with("ftp://") &&
+           text.chars().any(|c| "!@#$%^&*()_+-=[]{}|;".contains(c)) &&
+           text.chars().any(|c| c.is_ascii_digit()) &&
+           text.chars().any(|c| c.is_ascii_alphabetic()) {
             return true;
         }
 
-        // Pattern 2: API keys and tokens
+        // Pattern 2: API keys and tokens (check both start-of-text and embedded)
         let sensitive_prefixes = [
             "sk-",          // OpenAI
             "ghp_",         // GitHub personal access token
@@ -207,10 +213,15 @@ impl DataProcessor {
             "AKIA",         // AWS access key
             "ya29.",        // Google OAuth
             "AIza",         // Google API key
+            "xoxb-",        // Slack bot token
+            "xoxp-",        // Slack user token
+            "xoxs-",        // Slack session token
+            "shpat_",       // Shopify access token
+            "eyJrIjoi",     // Some Azure AD tokens
         ];
 
         for prefix in &sensitive_prefixes {
-            if text.starts_with(prefix) {
+            if text.contains(prefix) {
                 return true;
             }
         }
@@ -223,17 +234,42 @@ impl DataProcessor {
         // Pattern 4: Private keys
         if text.contains("BEGIN PRIVATE KEY") ||
            text.contains("BEGIN RSA PRIVATE KEY") ||
-           text.contains("BEGIN OPENSSH PRIVATE KEY") {
+           text.contains("BEGIN OPENSSH PRIVATE KEY") ||
+           text.contains("BEGIN EC PRIVATE KEY") ||
+           text.contains("BEGIN DSA PRIVATE KEY") {
             return true;
         }
 
-        // Pattern 5: Environment-like variables
-        if (text_lower.contains("password") ||
-            text_lower.contains("secret") ||
-            text_lower.contains("api_key") ||
-            text_lower.contains("apikey") ||
-            text_lower.contains("token")) &&
-           text.contains('=') {
+        // Pattern 5: Environment-like variables with secret values
+        // Match patterns like "password=X", "SECRET_KEY: X", "token=X"
+        // Uses keyword adjacency to separators to avoid false positives on code
+        let secret_keywords = ["password", "secret", "api_key", "apikey", "token", "passwd", "pwd"];
+        for keyword in &secret_keywords {
+            if let Some(pos) = text_lower.find(keyword) {
+                let after = pos + keyword.len();
+                if after < text.len() {
+                    let next_chars: String = text[after..].chars().take(2).collect();
+                    // Match keyword directly followed by = or : (with optional space)
+                    if next_chars.starts_with('=') ||
+                       next_chars.starts_with(':') ||
+                       next_chars.starts_with("= ") ||
+                       next_chars.starts_with(": ") {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Pattern 6: Database connection strings with credentials
+        // e.g. postgresql://user:password@host:port/db, mongodb://..., mysql://...
+        if (text_lower.starts_with("postgresql://") ||
+            text_lower.starts_with("postgres://") ||
+            text_lower.starts_with("mysql://") ||
+            text_lower.starts_with("mongodb://") ||
+            text_lower.starts_with("mongodb+srv://") ||
+            text_lower.starts_with("redis://") ||
+            text_lower.starts_with("amqp://")) &&
+           text.contains('@') {
             return true;
         }
 
