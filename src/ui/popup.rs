@@ -222,6 +222,33 @@ declare_class!(
     }
 );
 
+// Custom NSWindow subclass that can become key (needed for accessory apps to receive keystrokes)
+declare_class!(
+    struct ClipVaultPopupWindow;
+
+    unsafe impl ClassType for ClipVaultPopupWindow {
+        type Super = NSWindow;
+        type Mutability = objc2::mutability::MainThreadOnly;
+        const NAME: &'static str = "ClipVaultPopupWindow";
+    }
+
+    impl DeclaredClass for ClipVaultPopupWindow {
+        type Ivars = ();
+    }
+
+    unsafe impl ClipVaultPopupWindow {
+        #[method(canBecomeKeyWindow)]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+
+        #[method(canBecomeMainWindow)]
+        fn can_become_main_window(&self) -> bool {
+            true
+        }
+    }
+);
+
 impl KeyHandlingTextView {
     fn new_with_frame(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         unsafe { msg_send_id![mtm.alloc::<Self>(), initWithFrame: frame] }
@@ -363,13 +390,16 @@ impl PopupWindow {
             | NSWindowStyleMask::Closable
             | NSWindowStyleMask::Resizable;
 
-        let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-            mtm.alloc(),
-            content_rect,
-            style_mask,
-            NSBackingStoreType::NSBackingStoreBuffered,
-            false,
-        );
+        // Use custom window class so it can become key and receive keystrokes
+        let window_obj: Retained<ClipVaultPopupWindow> = msg_send_id![
+            mtm.alloc::<ClipVaultPopupWindow>(),
+            initWithContentRect: content_rect
+            styleMask: style_mask
+            backing: NSBackingStoreType::NSBackingStoreBuffered
+            defer: false
+        ];
+        
+        let window: Retained<NSWindow> = Retained::into_super(window_obj);
 
         window.setTitle(&NSString::from_str("Clipboard History"));
         window.center();
