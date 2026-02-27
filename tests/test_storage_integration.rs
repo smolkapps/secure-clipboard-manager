@@ -1,6 +1,6 @@
 // Integration tests for storage layer (database + encryption)
 use clipboard_manager::storage::{
-    database::{ClipboardDatabase, ClipboardItem},
+    database::Database,
     encryption::Encryptor,
 };
 use tempfile::TempDir;
@@ -10,7 +10,7 @@ fn test_database_creation() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
 
-    let db = ClipboardDatabase::new(db_path.clone()).unwrap();
+    let _db = Database::new(db_path.clone()).unwrap();
 
     // Database file should exist
     assert!(db_path.exists());
@@ -20,17 +20,22 @@ fn test_database_creation() {
 fn test_insert_and_retrieve_text() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
     // Insert text item
     let text = b"Hello, World!";
-    let item_id = db.insert_item(
+    let blob_id = db.store_blob(text).unwrap();
+    let timestamp = chrono::Utc::now().timestamp();
+    let item_id = db.store_item(
+        timestamp,
         "text",
         false,
         false,
         Some("Hello, World!"),
-        text,
+        text.len() as i64,
+        blob_id,
         None,
+        1,
     ).unwrap();
 
     assert!(item_id > 0);
@@ -48,7 +53,7 @@ fn test_insert_encrypted_item() {
     let db_path = temp_dir.path().join("test.db");
     let key_path = temp_dir.path().join("test.key");
 
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
     let encryptor = Encryptor::new(key_path).unwrap();
 
     // Encrypt sensitive data
@@ -56,13 +61,18 @@ fn test_insert_encrypted_item() {
     let encrypted = encryptor.encrypt(sensitive_text).unwrap();
 
     // Insert encrypted item
-    let item_id = db.insert_item(
+    let blob_id = db.store_blob(&encrypted).unwrap();
+    let timestamp = chrono::Utc::now().timestamp();
+    let item_id = db.store_item(
+        timestamp,
         "text",
-        true,  // is_sensitive
-        true,  // is_encrypted
+        true,   // is_sensitive
+        true,   // is_encrypted
         Some("API Key (encrypted)"),
-        &encrypted,
+        sensitive_text.len() as i64,
+        blob_id,
         None,
+        1,
     ).unwrap();
 
     assert!(item_id > 0);
@@ -82,22 +92,24 @@ fn test_insert_encrypted_item() {
 fn test_multiple_items_ordering() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
-    // Insert multiple items
+    // Insert multiple items with increasing timestamps
     for i in 1..=5 {
         let text = format!("Item {}", i);
-        db.insert_item(
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i as i64;
+        db.store_item(
+            timestamp,
             "text",
             false,
             false,
             Some(&text),
-            text.as_bytes(),
+            text.len() as i64,
+            blob_id,
             None,
+            1,
         ).unwrap();
-
-        // Small delay to ensure different timestamps
-        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
     // Retrieve items (should be in reverse chronological order)
@@ -113,24 +125,28 @@ fn test_multiple_items_ordering() {
 fn test_cleanup_old_items() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
-    // Insert item
+    // Insert item with a timestamp from the past
     let text = b"Test item";
-    db.insert_item(
+    let blob_id = db.store_blob(text).unwrap();
+    db.store_item(
+        0, // epoch timestamp = very old
         "text",
         false,
         false,
         Some("Test item"),
-        text,
+        text.len() as i64,
+        blob_id,
         None,
+        1,
     ).unwrap();
 
     // Verify it exists
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
 
-    // Cleanup items older than 0 seconds (should delete everything)
+    // Cleanup items older than 0 days (should delete everything older than now)
     let deleted = db.cleanup_old_items(0).unwrap();
     assert_eq!(deleted, 1);
 
@@ -143,18 +159,23 @@ fn test_cleanup_old_items() {
 fn test_image_storage() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
     // Create fake image data (just some bytes)
     let image_data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG header
 
-    let item_id = db.insert_item(
+    let blob_id = db.store_blob(&image_data).unwrap();
+    let timestamp = chrono::Utc::now().timestamp();
+    let item_id = db.store_item(
+        timestamp,
         "image",
         false,
         false,
         Some("640x480 PNG"),
-        &image_data,
+        image_data.len() as i64,
+        blob_id,
         Some(r#"{"width":640,"height":480,"format":"PNG"}"#),
+        1,
     ).unwrap();
 
     assert!(item_id > 0);
@@ -179,7 +200,7 @@ fn test_encryption_roundtrip() {
         b"Short text".to_vec(),
         b"sk-1234567890abcdefghijklmnopqrstuvwxyz".to_vec(),
         vec![0u8; 1000], // Binary data
-        "Unicode: 你好世界 🔒".as_bytes().to_vec(),
+        "Unicode: \u{4f60}\u{597d}\u{4e16}\u{754c} \u{1f512}".as_bytes().to_vec(),
     ];
 
     for plaintext in test_cases {
@@ -199,21 +220,25 @@ fn test_concurrent_database_access() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
 
-    // Create database
+    // Create database and insert initial item
     {
-        let db = ClipboardDatabase::new(db_path.clone()).unwrap();
-        db.insert_item("text", false, false, Some("Initial"), b"Initial", None).unwrap();
+        let db = Database::new(db_path.clone()).unwrap();
+        let blob_id = db.store_blob(b"Initial").unwrap();
+        let timestamp = chrono::Utc::now().timestamp();
+        db.store_item(timestamp, "text", false, false, Some("Initial"), 7, blob_id, None, 1).unwrap();
     }
 
     // Access from multiple "threads" (sequential but simulates concurrent access)
     for i in 0..10 {
-        let db = ClipboardDatabase::new(db_path.clone()).unwrap();
+        let db = Database::new(db_path.clone()).unwrap();
         let text = format!("Item {}", i);
-        db.insert_item("text", false, false, Some(&text), text.as_bytes(), None).unwrap();
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i + 1;
+        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
     }
 
     // Verify all items are there
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
     let items = db.get_recent_items(20).unwrap();
     assert_eq!(items.len(), 11); // Initial + 10 items
 }
@@ -222,18 +247,21 @@ fn test_concurrent_database_access() {
 fn test_get_item_count() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
     // Initially should be 0
-    let count = db.get_item_count().unwrap();
+    let count = db.count_items().unwrap();
     assert_eq!(count, 0);
 
     // Add 3 items
     for i in 1..=3 {
-        db.insert_item("text", false, false, Some(&format!("Item {}", i)), b"data", None).unwrap();
+        let text = format!("Item {}", i);
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i;
+        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
     }
 
-    let count = db.get_item_count().unwrap();
+    let count = db.count_items().unwrap();
     assert_eq!(count, 3);
 }
 
@@ -241,16 +269,21 @@ fn test_get_item_count() {
 fn test_empty_preview_text() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("test.db");
-    let db = ClipboardDatabase::new(db_path).unwrap();
+    let db = Database::new(db_path).unwrap();
 
     // Insert item without preview
-    let item_id = db.insert_item(
+    let blob_id = db.store_blob(b"Some data").unwrap();
+    let timestamp = chrono::Utc::now().timestamp();
+    let item_id = db.store_item(
+        timestamp,
         "text",
         false,
         false,
         None,  // No preview
-        b"Some data",
+        9,
+        blob_id,
         None,
+        1,
     ).unwrap();
 
     assert!(item_id > 0);
@@ -258,4 +291,104 @@ fn test_empty_preview_text() {
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 1);
     assert!(items[0].preview_text.is_none());
+}
+
+#[test]
+fn test_remove_duplicates() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db = Database::new(db_path).unwrap();
+
+    // Insert two items with the same preview
+    for i in 0..2 {
+        let blob_id = db.store_blob(b"same text").unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i;
+        db.store_item(timestamp, "text", false, false, Some("same text"), 9, blob_id, None, 1).unwrap();
+    }
+
+    assert_eq!(db.count_items().unwrap(), 2);
+
+    // Remove duplicates should find and remove both
+    let (removed, max_count) = db.remove_duplicates(Some("same text"), "text").unwrap();
+    assert_eq!(removed, 2);
+    assert_eq!(max_count, 1);
+    assert_eq!(db.count_items().unwrap(), 0);
+}
+
+#[test]
+fn test_enforce_history_limit() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db = Database::new(db_path).unwrap();
+
+    // Insert 10 items
+    for i in 0..10 {
+        let text = format!("Item {}", i);
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i;
+        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
+    }
+
+    assert_eq!(db.count_items().unwrap(), 10);
+
+    // Enforce limit of 5
+    let trimmed = db.enforce_history_limit(5).unwrap();
+    assert_eq!(trimmed, 5);
+    assert_eq!(db.count_items().unwrap(), 5);
+
+    // Remaining items should be the 5 newest
+    let items = db.get_recent_items(10).unwrap();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0].preview_text, Some("Item 9".to_string()));
+}
+
+#[test]
+fn test_soft_delete_and_purge() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db = Database::new(db_path).unwrap();
+
+    // Insert 3 items
+    for i in 0..3 {
+        let text = format!("Item {}", i);
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        let timestamp = chrono::Utc::now().timestamp() + i;
+        db.store_item(timestamp, "text", false, false, Some(&text), text.len() as i64, blob_id, None, 1).unwrap();
+    }
+
+    assert_eq!(db.count_items().unwrap(), 3);
+
+    // Soft delete all
+    let deleted = db.soft_delete_all_items().unwrap();
+    assert_eq!(deleted, 3);
+    assert_eq!(db.count_items().unwrap(), 0);
+
+    // Purge should not remove anything yet (items just deleted)
+    let purged = db.purge_deleted_items().unwrap();
+    assert_eq!(purged, 0);
+}
+
+#[test]
+fn test_copy_count_tracking() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db = Database::new(db_path).unwrap();
+
+    // Insert item with copy_count = 3
+    let blob_id = db.store_blob(b"repeated").unwrap();
+    let timestamp = chrono::Utc::now().timestamp();
+    db.store_item(timestamp, "text", false, false, Some("repeated"), 8, blob_id, None, 3).unwrap();
+
+    let items = db.get_recent_items(10).unwrap();
+    assert_eq!(items[0].copy_count, 3);
+}
+
+#[test]
+fn test_database_size() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let db = Database::new(db_path).unwrap();
+
+    let size = db.get_db_size().unwrap();
+    assert!(size > 0, "Database should have non-zero size after initialization");
 }
