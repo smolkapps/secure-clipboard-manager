@@ -53,6 +53,20 @@ declare_class!(
                             popup.move_selection_up();
                         }
                     }
+                    123 => {
+                        // Left arrow - move search cursor left
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.move_search_cursor_left();
+                        }
+                    }
+                    124 => {
+                        // Right arrow - move search cursor right
+                        if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
+                            let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            popup.move_search_cursor_right();
+                        }
+                    }
                     36 => {
                         // Return/Enter - paste and close
                         if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
@@ -72,7 +86,7 @@ declare_class!(
                         }
                     }
                     51 => {
-                        // Backspace - delete last search character
+                        // Backspace - delete search character at cursor
                         if let Some(popup_arc) = POPUP_FOR_KEYS.get() {
                             let popup = popup_arc.lock().unwrap_or_else(|e| e.into_inner());
                             popup.delete_search_char();
@@ -347,6 +361,7 @@ pub struct PopupWindow {
     visible: bool,
     auto_refresh_active: Arc<AtomicBool>,
     search_query: RefCell<String>,
+    search_cursor: RefCell<usize>,
     type_filter: RefCell<TypeFilter>,
     time_filter: RefCell<TimeFilter>,
     search_engine: SearchEngine,
@@ -373,6 +388,7 @@ impl PopupWindow {
             visible: false,
             auto_refresh_active: Arc::new(AtomicBool::new(false)),
             search_query: RefCell::new(String::new()),
+            search_cursor: RefCell::new(0),
             type_filter: RefCell::new(TypeFilter::All),
             time_filter: RefCell::new(TimeFilter::AllTime),
             search_engine: SearchEngine::new(),
@@ -550,7 +566,15 @@ impl PopupWindow {
                     &mut result, &filter_line,
                     &small_font, &NSColor::systemBlueColor(), None, &font_key, &fg_key, &bg_key,
                 );
-                let search_line = format!("  > {}_\n\n", search_q);
+                // Render search query with cursor position
+                let cursor_pos = *self.search_cursor.borrow();
+                let (before, after) = if cursor_pos <= search_q.len() {
+                    let (a, b) = search_q.split_at(cursor_pos);
+                    (a.to_string(), b.to_string())
+                } else {
+                    (search_q.clone(), String::new())
+                };
+                let search_line = format!("  > {}|{}\n\n", before, after);
                 Self::append_styled_line(
                     &mut result, &search_line,
                     &mono_font, &NSColor::labelColor(), None, &font_key, &fg_key, &bg_key,
@@ -762,6 +786,7 @@ impl PopupWindow {
 
                 // Reset search state on open
                 *self.search_query.borrow_mut() = String::new();
+                *self.search_cursor.borrow_mut() = 0;
                 *self.type_filter.borrow_mut() = TypeFilter::All;
                 *self.time_filter.borrow_mut() = TimeFilter::AllTime;
 
@@ -860,6 +885,9 @@ impl PopupWindow {
     }
 
     pub fn hide(&mut self) {
+        if !self.visible {
+            return; // Guard against re-entrancy from windowWillClose
+        }
         self.visible = false;
         self.auto_refresh_active.store(false, Ordering::Relaxed);
         log::info!("Popup window hidden");
@@ -1011,7 +1039,16 @@ impl PopupWindow {
     }
 
     pub fn append_search_char(&self, c: char) {
-        self.search_query.borrow_mut().push(c);
+        {
+            let mut q = self.search_query.borrow_mut();
+            let mut cur = self.search_cursor.borrow_mut();
+            if *cur >= q.len() {
+                q.push(c);
+            } else {
+                q.insert(*cur, c);
+            }
+            *cur += 1;
+        }
         self.load_items(true);
         self.refresh_display();
     }
@@ -1019,7 +1056,11 @@ impl PopupWindow {
     pub fn delete_search_char(&self) {
         {
             let mut q = self.search_query.borrow_mut();
-            q.pop();
+            let mut cur = self.search_cursor.borrow_mut();
+            if *cur > 0 && !q.is_empty() {
+                q.remove(*cur - 1);
+                *cur -= 1;
+            }
         }
         self.load_items(true);
         self.refresh_display();
@@ -1027,9 +1068,29 @@ impl PopupWindow {
 
     pub fn clear_search(&self) {
         *self.search_query.borrow_mut() = String::new();
+        *self.search_cursor.borrow_mut() = 0;
         *self.type_filter.borrow_mut() = TypeFilter::All;
         *self.time_filter.borrow_mut() = TimeFilter::AllTime;
         self.load_items(true);
+        self.refresh_display();
+    }
+
+    pub fn move_search_cursor_left(&self) {
+        let mut cur = self.search_cursor.borrow_mut();
+        if *cur > 0 {
+            *cur -= 1;
+        }
+        drop(cur);
+        self.refresh_display();
+    }
+
+    pub fn move_search_cursor_right(&self) {
+        let len = self.search_query.borrow().len();
+        let mut cur = self.search_cursor.borrow_mut();
+        if *cur < len {
+            *cur += 1;
+        }
+        drop(cur);
         self.refresh_display();
     }
 

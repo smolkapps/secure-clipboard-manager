@@ -104,7 +104,6 @@ fn test_multiple_items_ordering() {
             1,
         ).unwrap();
     }
-    }
 
     let items = db.get_recent_items(10).unwrap();
     assert_eq!(items.len(), 5);
@@ -152,21 +151,15 @@ fn test_image_storage() {
 
     let image_data = vec![0x89, 0x50, 0x4E, 0x47];
     let blob_id = db.store_blob(&image_data).unwrap();
-    let ts = chrono::Utc::now().timestamp();
-    let meta = r#"{"width":640,"height":480,"format":"PNG"}"#;
-    db.store_item(ts, "image", false, false, Some("640x480 PNG"),
-                  image_data.len() as i64, blob_id, Some(meta), 1).unwrap();
-
-    let blob_id2 = db.store_blob(&image_data).unwrap();
-    let timestamp2 = chrono::Utc::now().timestamp();
+    let timestamp = chrono::Utc::now().timestamp();
     let item_id = db.store_item(
-        timestamp2,
+        timestamp,
         "image",
         false,
         false,
         Some("640x480 PNG"),
         image_data.len() as i64,
-        blob_id2,
+        blob_id,
         Some(r#"{"width":640,"height":480,"format":"PNG"}"#),
         1,
     ).unwrap();
@@ -207,9 +200,27 @@ fn test_item_count() {
     let db_path = temp_dir.path().join("test.db");
     let db = Database::new(db_path).unwrap();
 
+    // Insert 4 items
+    let base_ts = chrono::Utc::now().timestamp();
+    for i in 0..4 {
+        let text = format!("Item {}", i);
+        let blob_id = db.store_blob(text.as_bytes()).unwrap();
+        db.store_item(
+            base_ts + i,
+            "text",
+            false,
+            false,
+            Some(&text),
+            text.len() as i64,
+            blob_id,
+            None,
+            1,
+        ).unwrap();
+    }
+
     // Verify all items are there
     let items = db.get_recent_items(20).unwrap();
-    assert_eq!(items.len(), 4); // Initial + 3 items
+    assert_eq!(items.len(), 4);
 }
 
 #[test]

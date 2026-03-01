@@ -49,8 +49,10 @@ fn bench_database_insert(c: &mut Criterion) {
         let text = "This is a test clipboard item for benchmarking";
         let mut ts = chrono::Utc::now().timestamp();
 
+        b.iter(|| {
             ts += 1;
             insert_item(&db, text, ts);
+        });
     });
 }
 

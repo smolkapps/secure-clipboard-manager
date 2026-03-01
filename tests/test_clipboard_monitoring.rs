@@ -9,6 +9,10 @@ fn test_monitor_creation_default() {
     let _monitor = ClipboardMonitor::new();
 }
 
+#[test]
+fn test_monitor_creation_custom_interval() {
+    let _monitor = ClipboardMonitor::with_poll_interval(100);
+    let _monitor2 = ClipboardMonitor::with_poll_interval(1000);
 }
 
 #[test]
@@ -66,10 +70,7 @@ fn test_monitor_default_trait() {
 
 #[test]
 fn test_multiple_monitors() {
-<<<<<<< HEAD
     // Should be able to create multiple monitors
-=======
->>>>>>> 6c89e94 (feat: add paste simulation, pinned items, delete, timestamps, and about dialog)
     let _monitor1 = ClipboardMonitor::new();
     let _monitor2 = ClipboardMonitor::new();
 }
