@@ -153,8 +153,7 @@ impl ClipboardMonitor {
         })
     }
 
-    /// Get current change count (used in tests)
-    #[cfg(test)]
+    /// Get current change count
     pub fn change_count() -> i64 {
         unsafe {
             let pasteboard = NSPasteboard::generalPasteboard();
