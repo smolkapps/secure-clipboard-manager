@@ -1,69 +1,92 @@
-// Launch at Login management via macOS LaunchAgent plist
-use std::path::PathBuf;
+// Launch at Login management via Apple ServiceManagement Framework
+use objc2::{class, msg_send, msg_send_id, rc::Id};
+use objc2_foundation::{NSString, NSProcessInfo};
 
-const PLIST_LABEL: &str = "com.smolkapps.clipboard-manager";
-
-/// Get the LaunchAgent plist path
-fn plist_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Library/LaunchAgents").join(format!("{}.plist", PLIST_LABEL)))
+#[link(name = "ServiceManagement", kind = "framework")]
+extern "C" {
+    fn SMLoginItemSetEnabled(identifier: *mut objc2::runtime::AnyObject, enabled: bool) -> bool;
 }
 
-/// Get the current executable path (resolves to the actual binary)
-fn exe_path() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|p| std::fs::canonicalize(p).ok())
+// SMAppService management for macOS 13+
+fn register_sm_app_service() -> Result<(), String> {
+    let cls = class!(SMAppService);
+    let service: Id<objc2::runtime::AnyObject> = unsafe { msg_send_id![cls, mainAppService] };
+    
+    let mut error: *mut std::ffi::c_void = std::ptr::null_mut();
+    let success: bool = unsafe { msg_send![&service, registerAndReturnError:&mut error] };
+    if success {
+        Ok(())
+    } else {
+        Err("Failed to register SMAppService".to_string())
+    }
 }
 
-/// Enable launch at login by creating a LaunchAgent plist
+fn unregister_sm_app_service() -> Result<(), String> {
+    let cls = class!(SMAppService);
+    let service: Id<objc2::runtime::AnyObject> = unsafe { msg_send_id![cls, mainAppService] };
+    
+    let mut error: *mut std::ffi::c_void = std::ptr::null_mut();
+    let success: bool = unsafe { msg_send![&service, unregisterAndReturnError:&mut error] };
+    if success {
+        Ok(())
+    } else {
+        Err("Failed to unregister SMAppService".to_string())
+    }
+}
+
+// Check if running on macOS 13.0 or later
+fn is_macos_13_or_later() -> bool {
+    let process_info = NSProcessInfo::processInfo();
+    
+    // We'll use alternative ways to check version to avoid NSOperatingSystemVersion trait errors
+    // Use respondsToSelector approach for safety
+    let selector = objc2::sel!(majorVersion);
+    let responds: bool = unsafe { msg_send![&process_info, respondsToSelector:selector] };
+    
+    if responds {
+        let version: objc2_foundation::NSOperatingSystemVersion = process_info.operatingSystemVersion();
+        return version.majorVersion >= 13;
+    }
+    
+    // Fallback if operatingSystemVersion is somehow unavailable
+    let str = unsafe { process_info.operatingSystemVersionString() };
+    let version_str = str.to_string();
+    
+    version_str.contains("Version 13") || version_str.contains("Version 14") || version_str.contains("Version 15")
+}
+
+/// Enable launch at login
 pub fn enable() -> Result<(), String> {
-    let plist = plist_path().ok_or("Could not determine LaunchAgents directory")?;
-    let exe = exe_path().ok_or("Could not determine executable path")?;
-
-    // Ensure LaunchAgents directory exists
-    if let Some(parent) = plist.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
+    if is_macos_13_or_later() {
+        log::info!("macOS 13+ detected, using SMAppService for Launch at Login");
+        register_sm_app_service()
+    } else {
+        log::info!("macOS <13 detected, using SMLoginItemSetEnabled for Launch at Login");
+        let identifier = NSString::from_str("com.smolkapps.clipboard-manager.Launcher");
+        let success = unsafe { SMLoginItemSetEnabled(Id::as_ptr(&identifier) as *mut _, true) };
+        if success {
+            Ok(())
+        } else {
+            Err("SMLoginItemSetEnabled returned false".to_string())
+        }
     }
-
-    let plist_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{label}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{exe}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-</dict>
-</plist>
-"#,
-        label = PLIST_LABEL,
-        exe = exe.display(),
-    );
-
-    std::fs::write(&plist, plist_content)
-        .map_err(|e| format!("Failed to write LaunchAgent plist: {}", e))?;
-
-    log::info!("Launch at Login enabled: {}", plist.display());
-    Ok(())
 }
 
-/// Disable launch at login by removing the LaunchAgent plist
+/// Disable launch at login
 pub fn disable() -> Result<(), String> {
-    let plist = plist_path().ok_or("Could not determine LaunchAgents directory")?;
-
-    if plist.exists() {
-        std::fs::remove_file(&plist)
-            .map_err(|e| format!("Failed to remove LaunchAgent plist: {}", e))?;
-        log::info!("Launch at Login disabled (plist removed)");
+    if is_macos_13_or_later() {
+        log::info!("macOS 13+ detected, using SMAppService to disable Launch at Login");
+        unregister_sm_app_service()
+    } else {
+        log::info!("macOS <13 detected, using SMLoginItemSetEnabled to disable Launch at Login");
+        let identifier = NSString::from_str("com.smolkapps.clipboard-manager.Launcher");
+        let success = unsafe { SMLoginItemSetEnabled(Id::as_ptr(&identifier) as *mut _, false) };
+        if success {
+            Ok(())
+        } else {
+            Err("SMLoginItemSetEnabled returned false".to_string())
+        }
     }
-
-    Ok(())
 }
 
 /// Sync the plist state with the desired setting
